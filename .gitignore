@@ -7,6 +7,10 @@
 *.dll
 *.so
 *.dylib
+chatlog
+chatlog.exe
+chatlog-mac
+chatlog-*
 
 # Test binary, built with `go test -c`
 *.test
@@ -27,8 +31,23 @@ go.work.sum
 # syncthing files
 .stfolder
 
-chatlog.exe# Added by goreleaser init:
+# Added by goreleaser init:
 dist/
+
+# local build/cache dirs
+.gocache/
+.gocache_local/
+.gomodcache/
+.gopath/
+
+# temp/run files
+*.pid
+*.log
+tmp/
+temp/
+
+# OS files
+.DS_Store
 
 # Claude Code temp directories
 tmpclaude-*/
