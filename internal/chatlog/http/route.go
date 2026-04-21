@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	"gopkg.in/yaml.v3"
 
+	"github.com/sjzar/chatlog/internal/chatlog/conf"
 	chatwechat "github.com/sjzar/chatlog/internal/chatlog/wechat"
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/model"
@@ -52,6 +54,12 @@ func (s *Service) initBaseRouter() {
 	})
 	// ping 不依赖数据库状态，放在中间件外层，保持可用性。
 	s.router.GET("/api/v1/ping", s.handlePing)
+	s.router.GET("/api/v1/hook/config", s.handleHookConfigGet)
+	s.router.POST("/api/v1/hook/config", s.handleHookConfigSet)
+	s.router.GET("/api/v1/hook/status", s.handleHookStatus)
+	s.router.GET("/api/v1/hook/events", s.handleHookEvents)
+	s.router.POST("/api/v1/hook/events/clear", s.handleHookEventsClear)
+	s.router.GET("/api/v1/hook/stream", s.handleHookStream)
 
 	s.router.NoRoute(s.NoRoute)
 }
@@ -90,6 +98,163 @@ func (s *Service) initAPIRouter() {
 
 func (s *Service) handlePing(c *gin.Context) {
 	writeByFormat(c, gin.H{"pong": true}, c.Query("format"))
+}
+
+func (s *Service) handleHookConfigGet(c *gin.Context) {
+	cfg := s.conf.GetMessageHook()
+	if cfg == nil {
+		cfg = &conf.MessageHook{}
+	}
+	writeByFormat(c, gin.H{
+		"keywords":     strings.TrimSpace(cfg.Keywords),
+		"notify_mode":  strings.TrimSpace(cfg.NotifyMode),
+		"post_url":     strings.TrimSpace(cfg.PostURL),
+		"before_count": cfg.BeforeCount,
+		"after_count":  cfg.AfterCount,
+	}, c.Query("format"))
+}
+
+type hookConfigReq struct {
+	Keywords    string `json:"keywords"`
+	NotifyMode  string `json:"notify_mode"`
+	PostURL     string `json:"post_url"`
+	BeforeCount int    `json:"before_count"`
+	AfterCount  int    `json:"after_count"`
+}
+
+func (s *Service) handleHookConfigSet(c *gin.Context) {
+	var req hookConfigReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errors.Err(c, errors.InvalidArg("body"))
+		return
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(req.NotifyMode))
+	switch mode {
+	case "", conf.HookNotifyMCP:
+		mode = conf.HookNotifyMCP
+	case conf.HookNotifyPost, conf.HookNotifyBoth:
+	default:
+		errors.Err(c, errors.InvalidArg("notify_mode"))
+		return
+	}
+
+	s.conf.SetHookKeywords(strings.TrimSpace(req.Keywords))
+	s.conf.SetHookNotifyMode(mode)
+	s.conf.SetHookPostURL(strings.TrimSpace(req.PostURL))
+	s.conf.SetHookBeforeCount(req.BeforeCount)
+	s.conf.SetHookAfterCount(req.AfterCount)
+	s.handleHookConfigGet(c)
+}
+
+func splitHookKeywords(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	raw = strings.ReplaceAll(raw, "|", "｜")
+	parts := strings.Split(raw, "｜")
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, p := range parts {
+		k := strings.TrimSpace(p)
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
+}
+
+func (s *Service) handleHookStatus(c *gin.Context) {
+	cfg := s.conf.GetMessageHook()
+	eventCount, lastEventAt, subscribers := s.getHookStats()
+	running := s.db != nil && s.db.GetDB() != nil
+	var keywords []string
+	mode := ""
+	postURL := ""
+	before := 5
+	after := 5
+	keywordsRaw := ""
+	if cfg != nil {
+		keywordsRaw = strings.TrimSpace(cfg.Keywords)
+		keywords = splitHookKeywords(cfg.Keywords)
+		mode = strings.TrimSpace(cfg.NotifyMode)
+		postURL = strings.TrimSpace(cfg.PostURL)
+		if cfg.BeforeCount > 0 {
+			before = cfg.BeforeCount
+		}
+		if cfg.AfterCount > 0 {
+			after = cfg.AfterCount
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"running":                 running,
+		"keywords":                keywords,
+		"keywords_raw":            keywordsRaw,
+		"keywords_count":          len(keywords),
+		"notify_mode":             mode,
+		"post_url":                postURL,
+		"before_count":            before,
+		"after_count":             after,
+		"mcp_notification_method": "notifications/chatlog/keyword_hit",
+		"sse_clients":             subscribers,
+		"event_count":             eventCount,
+		"last_event_at":           lastEventAt,
+		"events_store_file":       s.hookEventsStorePath(),
+	})
+}
+
+func (s *Service) handleHookEvents(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	c.JSON(http.StatusOK, gin.H{
+		"events": s.getRecentHookEvents(limit),
+	})
+}
+
+func (s *Service) handleHookEventsClear(c *gin.Context) {
+	deleted := s.clearHookEvents()
+	s.saveHookEventsToDisk()
+	c.JSON(http.StatusOK, gin.H{
+		"ok":          true,
+		"deleted":     deleted,
+		"store_file":  s.hookEventsStorePath(),
+		"event_count": 0,
+	})
+}
+
+func (s *Service) handleHookStream(c *gin.Context) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+
+	ch := s.addHookSubscriber()
+	defer s.removeHookSubscriber(ch)
+
+	c.SSEvent("snapshot", gin.H{"events": s.getRecentHookEvents(20)})
+	c.Writer.Flush()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	clientGone := c.Request.Context().Done()
+
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case <-clientGone:
+			return false
+		case evt := <-ch:
+			c.SSEvent("hook_event", evt)
+			return true
+		case <-ticker.C:
+			c.SSEvent("keepalive", gin.H{"ts": time.Now().Format(time.RFC3339)})
+			return true
+		}
+	})
 }
 
 func (s *Service) initMCPRouter() {

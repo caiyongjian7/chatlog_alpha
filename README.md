@@ -10,6 +10,8 @@
 - 图片 Key 获取：内置扫描与校验流程
 - 数据查询：HTTP + MCP（wx-cli 风格接口）
 - 数据源：内置 `wcdb_api` 兼容查询链路（非外部 DLL）
+- 关键词推送：前端/TUI 同步配置，支持 MCP 主动推送与 POST 通知
+- 推送事件：支持持久化保存、启动恢复与一键清理
 
 
 ## GitHub 自动构建产物
@@ -133,10 +135,35 @@ ls -l "$BIN_PATH"
 - `GET /api/v1/db/query`
 - `POST /api/v1/cache/clear`
 
+关键词推送（前端“关键词推送”页面与 TUI 同步）：
+
+- `GET /api/v1/hook/config`
+- `POST /api/v1/hook/config`
+- `GET /api/v1/hook/status`
+- `GET /api/v1/hook/events`
+- `POST /api/v1/hook/events/clear`
+- `GET /api/v1/hook/stream`（SSE 实时事件）
+
 输出格式：
 
 - 默认 `YAML`
 - 可选 `JSON`（`format=json`）
+
+## 关键词推送与持久化
+
+- 前端页面：访问根页面 `http://127.0.0.1:5030/`，切换到“关键词推送”标签页。
+- 配置项与 TUI 一致：
+  - `keywords`（多个用 `｜` 分隔）
+  - `notify_mode`（`mcp` / `post` / `both`）
+  - `post_url`
+  - `before_count` / `after_count`
+- MCP 主动推送方法名：`notifications/chatlog/keyword_hit`
+- 事件持久化文件：
+  - 优先：`<DataDir>/chatlog_hook_events.json`
+  - 回退：`<WorkDir>/chatlog_hook_events.json`
+- 清理方式：
+  - 前端“清空事件”按钮
+  - 或调用 `POST /api/v1/hook/events/clear`
 
 ## MCP
 

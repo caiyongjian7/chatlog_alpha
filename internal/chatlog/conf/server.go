@@ -1,5 +1,7 @@
 package conf
 
+import "strings"
+
 const (
 	DefalutHTTPAddr = "0.0.0.0:5030"
 )
@@ -69,9 +71,53 @@ func (c *ServerConfig) GetHTTPAddr() string {
 }
 
 func (c *ServerConfig) GetMessageHook() *MessageHook {
+	if c.MessageHook == nil {
+		c.MessageHook = &MessageHook{
+			NotifyMode:  HookNotifyMCP,
+			BeforeCount: 5,
+			AfterCount:  5,
+		}
+	}
 	return c.MessageHook
 }
 
 func (c *ServerConfig) GetSaveDecryptedMedia() bool {
 	return c.SaveDecryptedMedia
+}
+
+func (c *ServerConfig) SetHookKeywords(keywords string) {
+	cfg := c.GetMessageHook()
+	cfg.Keywords = strings.TrimSpace(keywords)
+}
+
+func (c *ServerConfig) SetHookNotifyMode(mode string) {
+	cfg := c.GetMessageHook()
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case HookNotifyMCP, HookNotifyPost, HookNotifyBoth:
+		cfg.NotifyMode = mode
+	default:
+		cfg.NotifyMode = HookNotifyMCP
+	}
+}
+
+func (c *ServerConfig) SetHookPostURL(url string) {
+	cfg := c.GetMessageHook()
+	cfg.PostURL = strings.TrimSpace(url)
+}
+
+func (c *ServerConfig) SetHookBeforeCount(n int) {
+	if n <= 0 {
+		n = 5
+	}
+	cfg := c.GetMessageHook()
+	cfg.BeforeCount = n
+}
+
+func (c *ServerConfig) SetHookAfterCount(n int) {
+	if n <= 0 {
+		n = 5
+	}
+	cfg := c.GetMessageHook()
+	cfg.AfterCount = n
 }

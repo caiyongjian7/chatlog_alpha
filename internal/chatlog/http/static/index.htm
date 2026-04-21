@@ -339,6 +339,7 @@
 
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTab('dashboard')">仪表盘 & 数据库</button>
+            <button class="tab-btn" onclick="switchTab('hook')">关键词推送</button>
             <button class="tab-btn" onclick="switchTab('wxcli')">wx-cli 兼容</button>
             <button class="tab-btn" onclick="switchTab('session')">最近会话</button>
             <button class="tab-btn" onclick="switchTab('chatroom')">群聊管理</button>
@@ -353,6 +354,52 @@
             <p class="text-gray" style="margin-bottom: 20px;">点击下方的数据库文件可直接浏览其表结构和数据内容。</p>
             <div id="db-list-container">
                 <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div id="hook" class="tab-content">
+            <h2>关键词推送</h2>
+            <p class="text-gray" style="margin-bottom: 20px;">与 TUI 同步配置关键词触发器，实时查看推送事件与运行状态。</p>
+            <div class="form-grid">
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>关键词（支持多个，使用 ｜ 分隔）</label>
+                    <input type="text" id="hook-keywords" placeholder="例如：到账｜告警｜异常">
+                </div>
+                <div class="form-group">
+                    <label>通知方式</label>
+                    <select id="hook-notify-mode">
+                        <option value="mcp">mcp</option>
+                        <option value="post">post</option>
+                        <option value="both">both</option>
+                    </select>
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>POST 地址（mode=post/both 时生效）</label>
+                    <input type="text" id="hook-post-url" placeholder="http://127.0.0.1:8080/webhook">
+                </div>
+                <div class="form-group">
+                    <label>前文条数</label>
+                    <input type="number" id="hook-before-count" value="5" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label>后文条数</label>
+                    <input type="number" id="hook-after-count" value="5" min="1" max="100">
+                </div>
+            </div>
+            <div class="actions">
+                <button class="btn btn-primary" onclick="saveHookConfig()">保存配置</button>
+                <button class="btn btn-secondary" onclick="loadHookPanel()">刷新状态</button>
+            </div>
+            <div id="hook-status" class="result-area" style="margin-top:15px;"></div>
+            <div id="hook-events" class="result-area" style="margin-top:15px;">
+                <div class="result-header">
+                    <strong>实时推送事件</strong>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button class="btn btn-danger btn-sm" onclick="clearHookEvents()">清空事件</button>
+                        <span id="hook-stream-state" class="badge">未连接</span>
+                    </div>
+                </div>
+                <pre id="hook-events-pre" style="max-height:420px;">暂无事件</pre>
             </div>
         </div>
 
@@ -640,9 +687,21 @@
     </div>
 
     <script>
+        let hookEventSource = null;
+        let hookEventsCache = [];
+        let hookStatusTimer = null;
+
         // Init
         document.addEventListener('DOMContentLoaded', () => {
             loadDBList();
+            loadHookPanel();
+            connectHookStream();
+            hookStatusTimer = setInterval(() => {
+                const hookTab = document.getElementById('hook');
+                if (hookTab && hookTab.classList.contains('active')) {
+                    loadHookStatus();
+                }
+            }, 5000);
         });
 
         // Tab Switching for Main Page
@@ -656,6 +715,178 @@
             if(tabId === 'dashboard') {
                 loadDBList();
             }
+            if (tabId === 'hook') {
+                loadHookPanel();
+                connectHookStream();
+            }
+        }
+
+        async function loadHookPanel() {
+            await Promise.all([loadHookConfig(), loadHookStatus(), loadHookEvents()]);
+        }
+
+        async function loadHookConfig() {
+            try {
+                const res = await fetch('/api/v1/hook/config');
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                document.getElementById('hook-keywords').value = data.keywords || '';
+                document.getElementById('hook-notify-mode').value = data.notify_mode || 'mcp';
+                document.getElementById('hook-post-url').value = data.post_url || '';
+                document.getElementById('hook-before-count').value = data.before_count || 5;
+                document.getElementById('hook-after-count').value = data.after_count || 5;
+            } catch (e) {
+                const box = document.getElementById('hook-status');
+                box.innerHTML = `<div class="text-danger">加载配置失败: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function saveHookConfig() {
+            const payload = {
+                keywords: document.getElementById('hook-keywords').value.trim(),
+                notify_mode: document.getElementById('hook-notify-mode').value,
+                post_url: document.getElementById('hook-post-url').value.trim(),
+                before_count: parseInt(document.getElementById('hook-before-count').value, 10) || 5,
+                after_count: parseInt(document.getElementById('hook-after-count').value, 10) || 5
+            };
+            try {
+                const res = await fetch('/api/v1/hook/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error(await res.text());
+                await loadHookPanel();
+                alert('关键词推送配置已保存');
+            } catch (e) {
+                alert(`保存失败: ${e.message}`);
+            }
+        }
+
+        async function loadHookStatus() {
+            const box = document.getElementById('hook-status');
+            try {
+                const res = await fetch('/api/v1/hook/status');
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                const running = data.running ? '<span class="text-success">运行中</span>' : '<span class="text-danger">未运行</span>';
+                const keywords = Array.isArray(data.keywords) && data.keywords.length > 0
+                    ? data.keywords.map(escapeHtml).join(' ｜ ')
+                    : '<span class="text-gray">未设置</span>';
+                box.innerHTML = `
+                    <div class="result-header"><strong>运行状态</strong></div>
+                    <div class="text-sm">服务状态: ${running}</div>
+                    <div class="text-sm">关键词数量: ${data.keywords_count || 0}</div>
+                    <div class="text-sm">关键词: ${keywords}</div>
+                    <div class="text-sm">通知方式: ${escapeHtml(data.notify_mode || 'mcp')}</div>
+                    <div class="text-sm">POST 地址: ${escapeHtml(data.post_url || '') || '<span class="text-gray">未设置</span>'}</div>
+                    <div class="text-sm">上下文: 前 ${data.before_count || 5} / 后 ${data.after_count || 5}</div>
+                    <div class="text-sm">MCP 方法: <code>${escapeHtml(data.mcp_notification_method || '')}</code></div>
+                    <div class="text-sm">SSE 连接数: ${data.sse_clients || 0}</div>
+                    <div class="text-sm">累计事件: ${data.event_count || 0}</div>
+                    <div class="text-sm">最近事件时间: ${escapeHtml(data.last_event_at || '-')}</div>
+                `;
+            } catch (e) {
+                box.innerHTML = `<div class="text-danger">加载状态失败: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function loadHookEvents() {
+            try {
+                const res = await fetch('/api/v1/hook/events?limit=50');
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                hookEventsCache = Array.isArray(data.events) ? data.events : [];
+                renderHookEvents();
+            } catch (e) {
+                const pre = document.getElementById('hook-events-pre');
+                pre.textContent = `加载事件失败: ${e.message}`;
+            }
+        }
+
+        async function clearHookEvents() {
+            if (!confirm('确定清空所有关键词推送事件记录吗？')) return;
+            try {
+                const res = await fetch('/api/v1/hook/events/clear', { method: 'POST' });
+                if (!res.ok) throw new Error(await res.text());
+                hookEventsCache = [];
+                renderHookEvents();
+                await loadHookStatus();
+                alert('事件记录已清空');
+            } catch (e) {
+                alert(`清空失败: ${e.message}`);
+            }
+        }
+
+        function connectHookStream() {
+            if (hookEventSource) {
+                hookEventSource.close();
+            }
+            const stateEl = document.getElementById('hook-stream-state');
+            hookEventSource = new EventSource('/api/v1/hook/stream');
+            stateEl.textContent = '连接中...';
+            stateEl.style.background = '#fff7e6';
+            stateEl.style.color = '#ad6800';
+
+            hookEventSource.onopen = () => {
+                stateEl.textContent = '已连接';
+                stateEl.style.background = '#e6f6ec';
+                stateEl.style.color = '#1f8b4c';
+            };
+            hookEventSource.addEventListener('snapshot', (e) => {
+                try {
+                    const data = JSON.parse(e.data || '{}');
+                    if (Array.isArray(data.events)) {
+                        hookEventsCache = data.events;
+                        renderHookEvents();
+                    }
+                } catch (_) {}
+            });
+            hookEventSource.addEventListener('hook_event', (e) => {
+                try {
+                    const evt = JSON.parse(e.data || '{}');
+                    hookEventsCache.unshift(evt);
+                    if (hookEventsCache.length > 100) {
+                        hookEventsCache = hookEventsCache.slice(0, 100);
+                    }
+                    renderHookEvents();
+                    loadHookStatus();
+                } catch (_) {}
+            });
+            hookEventSource.onerror = () => {
+                stateEl.textContent = '断开';
+                stateEl.style.background = '#fdecec';
+                stateEl.style.color = '#b42318';
+            };
+        }
+
+        function renderHookEvents() {
+            const pre = document.getElementById('hook-events-pre');
+            if (!hookEventsCache || hookEventsCache.length === 0) {
+                pre.textContent = '暂无事件';
+                return;
+            }
+            const lines = hookEventsCache.map((evt, idx) => {
+                const title = `[${idx + 1}] ${evt.created_at || ''} | 关键词: ${evt.keyword || ''} | 会话: ${evt.talker_name || evt.talker || ''} | 发送者: ${evt.sender_name || evt.sender || ''}`;
+                const content = `触发内容: ${evt.trigger_content || ''}`;
+                const ctx = Array.isArray(evt.context) ? evt.context : [];
+                const ctxLines = ctx.map((m) => {
+                    const pos = (m.position || '').toLowerCase();
+                    let tag = '上下文';
+                    if (pos === 'before') tag = '前文';
+                    if (pos === 'trigger') tag = '命中';
+                    if (pos === 'after') tag = '后文';
+                    const sender = m.sender || '';
+                    const time = m.time || '';
+                    const body = (m.content || '').replace(/\n/g, ' ');
+                    return `  - [${tag}] ${time} ${sender}: ${body}`;
+                });
+                if (ctxLines.length === 0) {
+                    ctxLines.push('  - (无上下文)');
+                }
+                return `${title}\n${content}\n上下文:\n${ctxLines.join('\n')}\n`;
+            });
+            pre.textContent = lines.join('\n');
         }
 
         // --- Dashboard / DB Viewer Logic ---
