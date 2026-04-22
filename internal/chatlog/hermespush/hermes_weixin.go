@@ -26,6 +26,7 @@ const (
 	weixinSendMessageEP    = "ilink/bot/sendmessage"
 	weixinAppID            = "bot"
 	weixinAppClientVersion = (2 << 16) | (2 << 8) | 0
+	weixinSessionExpired   = int64(-14)
 )
 
 type WeixinConfig struct {
@@ -180,6 +181,24 @@ func sendWeixinTextDirect(client *http.Client, cfg *WeixinConfig, text string) e
 	if text == "" {
 		return nil
 	}
+	contextToken := loadContextToken(cfg.HermesHome, cfg.AccountID, cfg.HomeChannel)
+	retCode, errCode, err := sendWeixinTextOnce(client, cfg, text, contextToken)
+	if err == nil {
+		return nil
+	}
+	if contextToken != "" && (retCode == weixinSessionExpired || errCode == weixinSessionExpired) {
+		// Align with Hermes adapter behavior: retry once without context token when session expired.
+		clearContextToken(cfg.HermesHome, cfg.AccountID, cfg.HomeChannel)
+		_, _, retryErr := sendWeixinTextOnce(client, cfg, text, "")
+		if retryErr == nil {
+			return nil
+		}
+		return retryErr
+	}
+	return err
+}
+
+func sendWeixinTextOnce(client *http.Client, cfg *WeixinConfig, text, contextToken string) (int64, int64, error) {
 	payload := map[string]any{
 		"msg": map[string]any{
 			"from_user_id":  "",
@@ -190,17 +209,17 @@ func sendWeixinTextDirect(client *http.Client, cfg *WeixinConfig, text string) e
 			"item_list":     []map[string]any{{"type": 1, "text_item": map[string]any{"text": text}}},
 		},
 	}
-	if contextToken := loadContextToken(cfg.HermesHome, cfg.AccountID, cfg.HomeChannel); contextToken != "" {
+	if contextToken != "" {
 		payload["msg"].(map[string]any)["context_token"] = contextToken
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	url := strings.TrimRight(cfg.BaseURL, "/") + "/" + weixinSendMessageEP
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("AuthorizationType", "ilink_bot_token")
@@ -212,28 +231,30 @@ func sendWeixinTextDirect(client *http.Client, cfg *WeixinConfig, text string) e
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("weixin send failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return 0, 0, fmt.Errorf("weixin send failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	if len(bytes.TrimSpace(respBody)) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 	var result map[string]any
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil
+		return 0, 0, nil
 	}
-	if errCode, ok := numberToInt(result["errcode"]); ok && errCode != 0 {
-		return fmt.Errorf("weixin send failed: errcode=%d errmsg=%v", errCode, result["errmsg"])
+	retCode, _ := numberToInt(result["ret"])
+	errCode, _ := numberToInt(result["errcode"])
+	if errCode != 0 {
+		return retCode, errCode, fmt.Errorf("weixin send failed: errcode=%d errmsg=%v", errCode, result["errmsg"])
 	}
-	if ret, ok := numberToInt(result["ret"]); ok && ret != 0 {
-		return fmt.Errorf("weixin send failed: ret=%d errmsg=%v", ret, result["errmsg"])
+	if retCode != 0 {
+		return retCode, errCode, fmt.Errorf("weixin send failed: ret=%d errmsg=%v", retCode, result["errmsg"])
 	}
-	return nil
+	return retCode, errCode, nil
 }
 
 func compactMediaPaths(paths []string) []string {
@@ -414,6 +435,33 @@ func loadContextToken(hermesHome, accountID, chatID string) string {
 		return ""
 	}
 	return strings.TrimSpace(payload[chatID])
+}
+
+func clearContextToken(hermesHome, accountID, chatID string) {
+	hermesHome = strings.TrimSpace(hermesHome)
+	accountID = strings.TrimSpace(accountID)
+	chatID = strings.TrimSpace(chatID)
+	if hermesHome == "" || accountID == "" || chatID == "" {
+		return
+	}
+	path := filepath.Join(hermesHome, "weixin", "accounts", accountID+".context-tokens.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return
+	}
+	if _, ok := payload[chatID]; !ok {
+		return
+	}
+	delete(payload, chatID)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, append(encoded, '\n'), 0o644)
 }
 
 func parseEnvFile(path string) (map[string]string, error) {

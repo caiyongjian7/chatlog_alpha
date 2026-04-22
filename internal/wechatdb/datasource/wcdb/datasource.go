@@ -334,7 +334,7 @@ func (ds *DataSource) GetSessions(ctx context.Context, key string, limit, offset
 func (ds *DataSource) GetMedia(ctx context.Context, _type, key string) (*model.Media, error) {
 	_ = ctx
 	if _type == "voice" {
-		sql := `SELECT voice_data FROM VoiceInfo WHERE svr_id = ` + strconv.Quote(key) + ` LIMIT 1`
+		sql := `SELECT voice_data FROM VoiceInfo WHERE svr_id = ` + strconv.Quote(key) + ` OR CAST(local_id AS TEXT) = ` + strconv.Quote(key) + ` LIMIT 1`
 		rows, err := ds.client.Query("voice", "", sql)
 		if err != nil || len(rows) == 0 {
 			return nil, errors.ErrMediaNotFound
@@ -376,13 +376,13 @@ WHERE f.md5 = %s OR f.file_name LIKE %s || '%%'
 		return nil, errors.ErrMediaNotFound
 	}
 	best := rows[0]
-	if _type == "image" {
-		for _, r := range rows {
-			if strings.HasSuffix(toString(r["file_name"]), "_h.dat") {
-				best = r
-				break
-			}
-		}
+	switch _type {
+	case "image":
+		best = bestImageRow(rows)
+	case "video":
+		best = bestVideoRow(rows)
+	case "file":
+		best = bestFileRow(rows)
 	}
 	mv4 := model.MediaV4{
 		Type:        _type,
@@ -395,6 +395,107 @@ WHERE f.md5 = %s OR f.file_name LIKE %s || '%%'
 		Dir2:        toString(best["dir2"]),
 	}
 	return mv4.Wrap(), nil
+}
+
+func bestImageRow(rows []map[string]interface{}) map[string]interface{} {
+	if len(rows) == 0 {
+		return nil
+	}
+	best := rows[0]
+	bestTier := imageDATTier(toString(best["file_name"]))
+	bestSize := toInt64(best["file_size"])
+	bestMtime := toInt64(best["modify_time"])
+	for i := 1; i < len(rows); i++ {
+		candidate := rows[i]
+		candidateTier := imageDATTier(toString(candidate["file_name"]))
+		candidateSize := toInt64(candidate["file_size"])
+		candidateMtime := toInt64(candidate["modify_time"])
+		if candidateTier > bestTier ||
+			(candidateTier == bestTier && candidateSize > bestSize) ||
+			(candidateTier == bestTier && candidateSize == bestSize && candidateMtime > bestMtime) {
+			best = candidate
+			bestTier = candidateTier
+			bestSize = candidateSize
+			bestMtime = candidateMtime
+		}
+	}
+	return best
+}
+
+func imageDATTier(name string) int {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	base := strings.TrimSuffix(lower, ".dat")
+	switch {
+	case strings.HasSuffix(base, "_h"), strings.HasSuffix(base, ".h"), strings.HasSuffix(base, "_hd"), strings.HasSuffix(base, ".hd"):
+		return 4
+	case strings.HasSuffix(base, "_b"), strings.HasSuffix(base, ".b"):
+		return 3
+	case strings.HasSuffix(base, "_t"), strings.HasSuffix(base, ".t"), strings.HasSuffix(base, "_thumb"), strings.HasSuffix(base, ".thumb"):
+		return 1
+	case strings.HasSuffix(lower, ".dat"):
+		return 2
+	default:
+		return 0
+	}
+}
+
+func bestVideoRow(rows []map[string]interface{}) map[string]interface{} {
+	if len(rows) == 0 {
+		return nil
+	}
+	best := rows[0]
+	bestTier := videoNameTier(toString(best["file_name"]))
+	bestSize := toInt64(best["file_size"])
+	bestMtime := toInt64(best["modify_time"])
+	for i := 1; i < len(rows); i++ {
+		candidate := rows[i]
+		candidateTier := videoNameTier(toString(candidate["file_name"]))
+		candidateSize := toInt64(candidate["file_size"])
+		candidateMtime := toInt64(candidate["modify_time"])
+		if candidateTier > bestTier ||
+			(candidateTier == bestTier && candidateSize > bestSize) ||
+			(candidateTier == bestTier && candidateSize == bestSize && candidateMtime > bestMtime) {
+			best = candidate
+			bestTier = candidateTier
+			bestSize = candidateSize
+			bestMtime = candidateMtime
+		}
+	}
+	return best
+}
+
+func videoNameTier(name string) int {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case strings.HasSuffix(lower, ".mp4"):
+		return 3
+	case strings.HasSuffix(lower, ".mov"), strings.HasSuffix(lower, ".m4v"), strings.HasSuffix(lower, ".mkv"), strings.HasSuffix(lower, ".avi"):
+		return 2
+	case strings.HasSuffix(lower, "_thumb.jpg"), strings.HasSuffix(lower, "_thumb.jpeg"), strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"), strings.HasSuffix(lower, ".png"):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func bestFileRow(rows []map[string]interface{}) map[string]interface{} {
+	if len(rows) == 0 {
+		return nil
+	}
+	best := rows[0]
+	bestSize := toInt64(best["file_size"])
+	bestMtime := toInt64(best["modify_time"])
+	for i := 1; i < len(rows); i++ {
+		candidate := rows[i]
+		candidateSize := toInt64(candidate["file_size"])
+		candidateMtime := toInt64(candidate["modify_time"])
+		if candidateSize > bestSize || (candidateSize == bestSize && candidateMtime > bestMtime) {
+			best = candidate
+			bestSize = candidateSize
+			bestMtime = candidateMtime
+		}
+	}
+	return best
 }
 
 func (ds *DataSource) GetSNSTimeline(ctx context.Context, username string, limit, offset int) ([]map[string]interface{}, error) {

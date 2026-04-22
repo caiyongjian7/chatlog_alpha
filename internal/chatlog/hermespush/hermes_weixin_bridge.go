@@ -79,7 +79,7 @@ func sendWeixinViaHermesPython(cfg *WeixinConfig, req WeixinSendRequest) error {
 		if strings.TrimSpace(result.Error) == "" {
 			result.Error = "unknown error"
 		}
-		return fmt.Errorf(result.Error)
+		return fmt.Errorf("%s", result.Error)
 	}
 	return nil
 }

@@ -85,6 +85,7 @@ func (m *MessageV4) Wrap(talker string) *Message {
 	// 语音消息
 	if _m.Type == 34 {
 		_m.Contents["voice"] = fmt.Sprint(m.ServerID)
+		_m.Contents["voice_local_id"] = fmt.Sprint(m.LocalID)
 	}
 
 	if len(m.PackedInfoData) != 0 {

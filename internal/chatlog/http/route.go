@@ -601,6 +601,10 @@ func extractMediaRef(m *model.Message) (mediaType string, keys []string) {
 	case model.MessageTypeVoice:
 		mediaType = "voice"
 		keys = appendUnique(keys, get("voice"))
+		keys = appendUnique(keys, get("voice_local_id"))
+		if m.Seq > 0 {
+			keys = appendUnique(keys, fmt.Sprintf("%d", m.Seq%1000000))
+		}
 	case model.MessageTypeShare:
 		if m.SubType == model.MessageSubTypeFile {
 			mediaType = "file"
@@ -921,6 +925,8 @@ func (s *Service) handleHistory(c *gin.Context) {
 		chatType = "group"
 	}
 	rows := make([]gin.H, 0, len(messages))
+	// Keep media key/path cache warm for direct /image/{md5} access.
+	s.populateMD5PathCache(messages)
 	for _, m := range messages {
 		rows = append(rows, toHistoryMessage(m, c.Request.Host))
 	}
@@ -1737,7 +1743,7 @@ func (s *Service) handleMedia(c *gin.Context, _type string) {
 			// Fallback 1: try to find path from md5->path cache
 			if cachedPath := s.getMD5FromCache(k); cachedPath != "" {
 				// Try to find the actual file with different suffixes
-				if absolutePath := s.tryFindFileWithSuffixes(cachedPath); absolutePath != "" {
+				if absolutePath := s.tryFindFileWithSuffixes(_type, cachedPath); absolutePath != "" {
 					if _type == "image" {
 						s.handleImageFile(c, absolutePath)
 						return
@@ -1753,6 +1759,13 @@ func (s *Service) handleMedia(c *gin.Context, _type string) {
 
 			// Fallback 2: try to find file by md5 in msg/attach directory
 			if _type == "image" && !strings.Contains(k, "/") {
+				// Build md5->path map from recent messages on demand if cache is cold.
+				if cachedPath := s.resolveImagePathFromRecentMessages(k); cachedPath != "" {
+					if absolutePath := s.tryFindFileWithSuffixes("image", cachedPath); absolutePath != "" {
+						s.handleImageFile(c, absolutePath)
+						return
+					}
+				}
 				if foundPath := s.findImageByMD5(k); foundPath != "" {
 					// Process the found image file
 					s.handleImageFile(c, foundPath)
@@ -1797,7 +1810,7 @@ func (s *Service) findPath(_type string, key string) (string, error) {
 	}
 	switch _type {
 	case "image":
-		for _, suffix := range []string{"_h.dat", ".dat", "_t.dat"} {
+		for _, suffix := range imageDATSuffixesByPriority() {
 			candidate := absolutePath + suffix
 			if _, err := os.Stat(candidate); err == nil {
 				if rel, relErr := s.relativeDataPath(candidate); relErr == nil {
@@ -1818,80 +1831,230 @@ func (s *Service) findPath(_type string, key string) (string, error) {
 	return "", errors.ErrMediaNotFound
 }
 
-// findImageByMD5 searches for an image-like file token in msg/attach directory.
+type imageDATFileCandidate struct {
+	path  string
+	tier  int
+	size  int64
+	mtime int64
+}
+
+func imageDATSuffixTier(name string) int {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	base := strings.TrimSuffix(lower, ".dat")
+	switch {
+	case strings.HasSuffix(base, "_h"), strings.HasSuffix(base, ".h"), strings.HasSuffix(base, "_hd"), strings.HasSuffix(base, ".hd"):
+		return 4
+	case strings.HasSuffix(base, "_b"), strings.HasSuffix(base, ".b"):
+		return 3
+	case strings.HasSuffix(base, "_t"), strings.HasSuffix(base, ".t"), strings.HasSuffix(base, "_thumb"), strings.HasSuffix(base, ".thumb"):
+		return 1
+	case strings.HasSuffix(lower, ".dat"):
+		return 2
+	default:
+		return 0
+	}
+}
+
+func imageDATSuffixesByPriority() []string {
+	// WeFlow order: H/HD -> B -> base -> T/thumb
+	return []string{
+		"_h.dat", ".h.dat", "_hd.dat", ".hd.dat",
+		"_b.dat", ".b.dat",
+		".dat",
+		"_t.dat", ".t.dat", "_thumb.dat", ".thumb.dat",
+	}
+}
+
+func collectImageDATCandidates(dataDir, basePath string) []string {
+	fullBase := filepath.Join(dataDir, basePath)
+	out := make([]string, 0, 16)
+	seen := map[string]struct{}{}
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		if _, err := os.Stat(path); err != nil {
+			return
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	add(fullBase)
+	for _, suffix := range imageDATSuffixesByPriority() {
+		add(fullBase + suffix)
+	}
+	return out
+}
+
+func isImageHardlinkCandidateName(fileName, baseMD5 string) bool {
+	lower := strings.ToLower(strings.TrimSpace(fileName))
+	baseMD5 = strings.ToLower(strings.TrimSpace(baseMD5))
+	if !strings.HasSuffix(lower, ".dat") || baseMD5 == "" {
+		return false
+	}
+	base := strings.TrimSuffix(lower, ".dat")
+	if base == baseMD5 {
+		return true
+	}
+	if strings.HasPrefix(base, baseMD5+"_") || strings.HasPrefix(base, baseMD5+".") {
+		return true
+	}
+	if len(base) == len(baseMD5)+1 && strings.HasPrefix(base, baseMD5) {
+		return true
+	}
+	return false
+}
+
+func pickBetterImageDATCandidate(cur, next *imageDATFileCandidate) *imageDATFileCandidate {
+	if cur == nil {
+		return next
+	}
+	if next == nil {
+		return cur
+	}
+	if next.tier > cur.tier {
+		return next
+	}
+	if next.tier < cur.tier {
+		return cur
+	}
+	if next.size > cur.size {
+		return next
+	}
+	if next.size < cur.size {
+		return cur
+	}
+	if next.mtime > cur.mtime {
+		return next
+	}
+	if next.mtime < cur.mtime {
+		return cur
+	}
+	if next.path < cur.path {
+		return next
+	}
+	return cur
+}
+
+func buildImageDATCandidate(path string, info os.FileInfo) *imageDATFileCandidate {
+	tier := imageDATSuffixTier(filepath.Base(path))
+	if tier <= 0 {
+		return nil
+	}
+	return &imageDATFileCandidate{
+		path:  path,
+		tier:  tier,
+		size:  info.Size(),
+		mtime: info.ModTime().Unix(),
+	}
+}
+
+func imageSessionMonthRootFromPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	parts := strings.Split(cleaned, "/")
+	for i := 0; i+3 < len(parts); i++ {
+		if strings.EqualFold(parts[i], "msg") && strings.EqualFold(parts[i+1], "attach") {
+			if strings.TrimSpace(parts[i+2]) == "" || strings.TrimSpace(parts[i+3]) == "" {
+				continue
+			}
+			return filepath.FromSlash(strings.Join(parts[:i+4], "/"))
+		}
+	}
+	return ""
+}
+
+func (s *Service) imageSessionMonthRoots(token string) []string {
+	token = strings.ToLower(strings.TrimSpace(token))
+	dataDir := s.conf.GetDataDir()
+	dedup := make(map[string]struct{})
+	matched := make([]string, 0, 16)
+	all := make([]string, 0, 32)
+
+	s.md5PathMu.RLock()
+	defer s.md5PathMu.RUnlock()
+	for _, p := range s.md5PathCache {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		absPath := p
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(dataDir, p)
+		}
+		root := imageSessionMonthRootFromPath(absPath)
+		if root == "" {
+			continue
+		}
+		if _, ok := dedup[root]; ok {
+			continue
+		}
+		dedup[root] = struct{}{}
+		all = append(all, root)
+
+		if token == "" {
+			matched = append(matched, root)
+			continue
+		}
+		lowerPath := strings.ToLower(filepath.ToSlash(p))
+		lowerBase := strings.ToLower(filepath.Base(p))
+		if strings.Contains(lowerPath, token) || strings.Contains(lowerBase, token) {
+			matched = append(matched, root)
+		}
+	}
+	if len(matched) > 0 {
+		return matched
+	}
+	return all
+}
+
+// findImageByMD5 searches encrypted image DAT in msg/attach directory.
 // Key can be md5, dat basename, or numeric file token.
 func (s *Service) findImageByMD5(md5 string) string {
-	dataDir := s.conf.GetDataDir()
-	attachDir := filepath.Join(dataDir, "msg", "attach")
-
-	// Check if attach directory exists
-	if _, err := os.Stat(attachDir); os.IsNotExist(err) {
+	token := strings.ToLower(strings.TrimSpace(md5))
+	if token == "" {
+		return ""
+	}
+	roots := s.imageSessionMonthRoots(token)
+	if len(roots) == 0 {
 		return ""
 	}
 
-	var foundPath string
-	bestScore := -1
-	scoreOf := func(name string) int {
-		lower := strings.ToLower(name)
-		switch {
-		case strings.HasSuffix(lower, "_h.dat"):
-			return 5
-		case strings.HasSuffix(lower, ".dat"):
-			return 4
-		case strings.HasSuffix(lower, "_t.dat"):
-			return 3
-		case filepath.Ext(lower) == "":
-			return 2
-		case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"), strings.HasSuffix(lower, ".png"), strings.HasSuffix(lower, ".gif"), strings.HasSuffix(lower, ".bmp"), strings.HasSuffix(lower, ".webp"):
-			return 1
-		default:
-			return 0
-		}
-	}
+	var best *imageDATFileCandidate
 
-	// Walk through the attach directory to find files matching the md5
-	err := filepath.Walk(attachDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			// Skip directories we can't access
-			if os.IsPermission(err) {
-				return filepath.SkipDir
+	for _, root := range roots {
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+		// Walk only session-month scoped directories to match WeFlow candidate selection.
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				if os.IsPermission(err) {
+					return filepath.SkipDir
+				}
+				return nil
 			}
-			return err
-		}
-
-		// Skip directories
-		if info.IsDir() {
-			return nil
-		}
-
-		// Check if file name contains the md5
-		baseName := strings.ToLower(filepath.Base(path))
-		if !strings.Contains(baseName, strings.ToLower(md5)) {
-			return nil
-		}
-
-		// Accept dat/no-ext/common image file for fallback.
-		score := scoreOf(baseName)
-		if score == 0 {
-			return nil
-		}
-
-		// Try to read and verify the file
-		if _, err := os.Stat(path); err == nil {
-			if score > bestScore {
-				bestScore = score
-				foundPath = path
+			if info.IsDir() {
+				return nil
 			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return ""
+			baseName := strings.ToLower(filepath.Base(path))
+			if !isImageHardlinkCandidateName(baseName, token) {
+				return nil
+			}
+			candidate := buildImageDATCandidate(path, info)
+			if candidate == nil {
+				return nil
+			}
+			best = pickBetterImageDATCandidate(best, candidate)
+			return nil
+		})
 	}
-	if foundPath != "" {
-		return foundPath
+	if best != nil {
+		return best.path
 	}
 
 	return ""
@@ -1911,20 +2074,79 @@ func (s *Service) getMD5FromCache(md5 string) string {
 	return ""
 }
 
-// tryFindFileWithSuffixes tries to find a file with different suffixes
-// Priority: .dat (original) -> _h.dat (HD) -> _t.dat (thumbnail)
-func (s *Service) tryFindFileWithSuffixes(basePath string) string {
+func (s *Service) resolveImagePathFromRecentMessages(md5 string) string {
+	md5 = strings.ToLower(strings.TrimSpace(md5))
+	if md5 == "" {
+		return ""
+	}
+	if p := s.getMD5FromCache(md5); p != "" {
+		return p
+	}
+
+	sessions, err := s.db.GetSessions("", 80, 0)
+	if err != nil || sessions == nil || len(sessions.Items) == 0 {
+		return ""
+	}
+	for _, sess := range sessions.Items {
+		talker := strings.TrimSpace(sess.UserName)
+		if talker == "" {
+			continue
+		}
+		msgs, err := s.db.GetMessages(time.Time{}, time.Time{}, talker, "", "", 200, 0)
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+		s.populateMD5PathCache(msgs)
+
+		for _, msg := range msgs {
+			if msg == nil || msg.Type != model.MessageTypeImage || msg.Contents == nil {
+				continue
+			}
+			md5Val := strings.ToLower(strings.TrimSpace(fmt.Sprint(msg.Contents["md5"])))
+			if md5Val != md5 {
+				continue
+			}
+			pathVal := strings.TrimSpace(fmt.Sprint(msg.Contents["path"]))
+			if pathVal != "" {
+				s.md5PathMu.Lock()
+				s.md5PathCache[md5] = pathVal
+				s.md5PathMu.Unlock()
+				return pathVal
+			}
+		}
+	}
+	return ""
+}
+
+// tryFindFileWithSuffixes tries to find media files from cached basePath.
+func (s *Service) tryFindFileWithSuffixes(mediaType, basePath string) string {
 	dataDir := s.conf.GetDataDir()
 
-	// Try different suffixes with priority: original -> HD -> thumbnail
-	suffixes := []string{".dat", "_h.dat", "_t.dat"}
-
-	for _, suffix := range suffixes {
-		testPath := filepath.Join(dataDir, basePath+suffix)
-		if _, err := os.Stat(testPath); err == nil {
-			log.Debug().Str("path", testPath).Str("suffix", suffix).Msg("Found file with suffix")
-			return testPath
+	switch mediaType {
+	case "image":
+		var best *imageDATFileCandidate
+		for _, testPath := range collectImageDATCandidates(dataDir, basePath) {
+			info, err := os.Stat(testPath)
+			if err == nil {
+				if candidate := buildImageDATCandidate(testPath, info); candidate != nil {
+					best = pickBetterImageDATCandidate(best, candidate)
+				}
+			}
 		}
+		if best != nil {
+			log.Debug().Str("path", best.path).Msg("Found best image file with suffix")
+			return best.path
+		}
+	case "video":
+		for _, suffix := range []string{".mp4", ".mov", ".m4v", "_thumb.jpg"} {
+			testPath := filepath.Join(dataDir, basePath+suffix)
+			if _, err := os.Stat(testPath); err == nil {
+				log.Debug().Str("path", testPath).Str("media_type", mediaType).Msg("Found file with suffix")
+				return testPath
+			}
+		}
+	case "file":
+		// file fallback relies on exact cached path or DB-provided path.
 	}
 
 	// Try without any suffix (might already have extension)
@@ -2298,8 +2520,8 @@ func (s *Service) handleClearCache(c *gin.Context) {
 
 		if _, isGenerated := generatedExts[ext]; isGenerated {
 			baseName := strings.TrimSuffix(path, ext)
-			// Check for corresponding .dat file. WeChat can use various suffixes.
-			datSuffixes := []string{".dat", "_h.dat", "_t.dat"}
+			// Check for corresponding .dat file. Keep suffix order aligned with media selection.
+			datSuffixes := []string{"_h.dat", ".dat", "_t.dat"}
 			for _, datSuffix := range datSuffixes {
 				datPath := baseName + datSuffix
 				if _, statErr := os.Stat(datPath); statErr == nil {

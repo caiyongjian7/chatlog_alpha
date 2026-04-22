@@ -231,6 +231,9 @@ curl "http://127.0.0.1:5030/api/v1/sns/media/proxy?key=2503144471&url=https%3A%2
   - 也会尝试读取 `config.yaml` 的 `platforms.weixin.extra`
   - 前端可直接读取并修改上述微信配置，保存时会写回 Hermes Home 下的 `.env`
   - 启用 `weixin` 模式时，会校验 Hermes Agent 已安装，且微信渠道已配置完成
+  - iLink 接口限制提醒：
+    - 该接口存在会话态限制，长时间未交互后，主动推送可能被拒绝或无效。
+    - 经验值：先主动给 `clawbot` 发送一条消息后，通常可连续主动推送约 `10` 次（实际次数会随账号状态与接口策略波动）。
 - 事件持久化文件：
   - 优先：`<DataDir>/chatlog_hook_events.json`
   - 回退：`<WorkDir>/chatlog_hook_events.json`

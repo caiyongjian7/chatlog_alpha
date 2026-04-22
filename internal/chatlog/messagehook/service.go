@@ -5,8 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,10 +25,12 @@ import (
 )
 
 const (
-	defaultPollInterval = 2 * time.Second
-	maxTalkerScan       = 300
-	maxMsgScanPerTalker = 200
-	maxContextScan      = 2000
+	defaultPollInterval  = 2 * time.Second
+	maxTalkerScan        = 300
+	maxMsgScanPerTalker  = 200
+	maxContextScan       = 2000
+	voiceResolveRetries  = 20
+	voiceResolveInterval = 500 * time.Millisecond
 )
 
 type Config interface {
@@ -326,19 +333,27 @@ func (s *Service) dispatch(cfg *conf.MessageHook, evt Event, trigger *model.Mess
 		} else {
 			s.waitWeixinInterval(cfg.WeixinInterval)
 			mediaPaths, cleanup, mediaErr := s.resolveTriggerMedia(trigger)
+			mediaResolveDetail := ""
 			if mediaErr != nil {
 				log.Warn().Err(mediaErr).Msg("keyword hook media resolve failed")
+				mediaResolveDetail = mediaErr.Error()
 			}
 			if err := hermespush.SendWeixin(s.httpClient, weixinCfg, hermespush.WeixinSendRequest{
 				Text:       buildWeixinMessage(evt),
 				MediaPaths: mediaPaths,
 			}); err != nil {
 				log.Warn().Err(err).Msg("keyword hook weixin notify failed")
-				evt.Deliveries = append(evt.Deliveries, DeliveryResult{Target: "weixin", Status: "failed", Detail: err.Error(), Success: false})
+				detail := err.Error()
+				if mediaResolveDetail != "" {
+					detail += "; media_resolve=" + mediaResolveDetail
+				}
+				evt.Deliveries = append(evt.Deliveries, DeliveryResult{Target: "weixin", Status: "failed", Detail: detail, Success: false})
 			} else {
 				detail := ""
 				if len(mediaPaths) > 0 {
 					detail = fmt.Sprintf("media=%d", len(mediaPaths))
+				} else if mediaResolveDetail != "" {
+					detail = "media_resolve_failed=" + mediaResolveDetail
 				}
 				evt.Deliveries = append(evt.Deliveries, DeliveryResult{Target: "weixin", Status: "sent", Detail: detail, Success: true})
 			}
@@ -366,9 +381,51 @@ func (s *Service) waitWeixinInterval(intervalSeconds int) {
 }
 
 func (s *Service) resolveTriggerMedia(trigger *model.Message) ([]string, []string, error) {
+	mediaType, _ := extractTriggerMediaRef(trigger)
+	paths, cleanup, err := s.resolveTriggerMediaOnce(trigger)
+	if err == nil || mediaType != "voice" {
+		return paths, cleanup, err
+	}
+	// Voice blobs may land in VoiceInfo slightly after the text row is visible.
+	// Retry briefly to avoid degrading to text-only forwarding.
+	lastErr := err
+	for i := 0; i < voiceResolveRetries; i++ {
+		time.Sleep(voiceResolveInterval)
+		paths, cleanup, err = s.resolveTriggerMediaOnce(trigger)
+		if err == nil {
+			return paths, cleanup, nil
+		}
+		lastErr = err
+	}
+	return nil, nil, lastErr
+}
+
+func (s *Service) resolveTriggerMediaOnce(trigger *model.Message) ([]string, []string, error) {
 	mediaType, keys := extractTriggerMediaRef(trigger)
 	if mediaType == "" || len(keys) == 0 {
 		return nil, nil, nil
+	}
+	if mediaType == "voice" {
+		// Voice forwarding requirement: always fetch via media_url first and
+		// transcode to m4a before sending.
+		for _, key := range keys {
+			path, err := s.downloadTriggerMedia(mediaType, key)
+			if err == nil && path != "" {
+				return []string{path}, []string{path}, nil
+			}
+		}
+		// Fallback when /voice/{key} is temporarily unavailable.
+		for _, key := range keys {
+			media, err := s.db.GetMedia(mediaType, key)
+			if err != nil || media == nil || len(media.Data) == 0 {
+				continue
+			}
+			path, err := s.writeVoiceAsM4A(media.Data, "")
+			if err == nil && path != "" {
+				return []string{path}, []string{path}, nil
+			}
+		}
+		return nil, nil, fmt.Errorf("media file not found")
 	}
 	for _, key := range keys {
 		path, err := s.downloadTriggerMedia(mediaType, key)
@@ -380,22 +437,6 @@ func (s *Service) resolveTriggerMedia(trigger *model.Message) ([]string, []strin
 		media, err := s.db.GetMedia(mediaType, key)
 		if err != nil || media == nil {
 			continue
-		}
-		if mediaType == "voice" && len(media.Data) > 0 {
-			tmp, err := os.CreateTemp("", "chatlog-weixin-voice-*"+voiceExtForData(media.Data))
-			if err != nil {
-				return nil, nil, err
-			}
-			if _, err := tmp.Write(media.Data); err != nil {
-				tmp.Close()
-				_ = os.Remove(tmp.Name())
-				return nil, nil, err
-			}
-			if err := tmp.Close(); err != nil {
-				_ = os.Remove(tmp.Name())
-				return nil, nil, err
-			}
-			return []string{tmp.Name()}, []string{tmp.Name()}, nil
 		}
 		path := strings.TrimSpace(media.Path)
 		if path == "" {
@@ -424,7 +465,33 @@ func (s *Service) downloadTriggerMedia(mediaType, key string) (string, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("media download failed: status=%d", resp.StatusCode)
 	}
-	tmp, err := os.CreateTemp("", "chatlog-weixin-media-*"+mediaSuffix(mediaType))
+	dir, err := s.ensureMediaDownloadDir()
+	if err != nil {
+		return "", err
+	}
+	if mediaType == "voice" {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		return s.writeVoiceAsM4A(raw, resp.Header.Get("Content-Type"))
+	}
+	pattern := "chatlog-weixin-media-*"
+	if name := filenameFromResponse(resp); name != "" {
+		if filepath.Ext(name) == "" {
+			if ext := extensionFromContentType(resp.Header.Get("Content-Type")); ext != "" {
+				name += ext
+			} else {
+				name += mediaSuffix(mediaType)
+			}
+		}
+		pattern = "chatlog-weixin-media-*-" + name
+	} else if ext := extensionFromContentType(resp.Header.Get("Content-Type")); ext != "" {
+		pattern += ext
+	} else {
+		pattern += mediaSuffix(mediaType)
+	}
+	tmp, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return "", err
 	}
@@ -438,6 +505,154 @@ func (s *Service) downloadTriggerMedia(mediaType, key string) (string, error) {
 		return "", err
 	}
 	return tmp.Name(), nil
+}
+
+func (s *Service) ensureMediaDownloadDir() (string, error) {
+	dir := filepath.Join(s.conf.GetDataDir(), "tmp", "weixin_media")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func filenameFromResponse(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	if cd := strings.TrimSpace(resp.Header.Get("Content-Disposition")); cd != "" {
+		_, params, err := mime.ParseMediaType(cd)
+		if err == nil {
+			if name := sanitizeFilename(params["filename*"]); name != "" {
+				return name
+			}
+			if name := sanitizeFilename(params["filename"]); name != "" {
+				return name
+			}
+		}
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		escapedPath := strings.TrimSpace(resp.Request.URL.EscapedPath())
+		if escapedPath == "" {
+			escapedPath = strings.TrimSpace(resp.Request.URL.Path)
+		}
+		if escapedPath != "" {
+			base := path.Base(escapedPath)
+			if name, err := neturl.PathUnescape(base); err == nil {
+				if name = sanitizeFilename(name); name != "" {
+					return name
+				}
+			}
+			if name := sanitizeFilename(base); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func sanitizeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	// RFC 5987 style: UTF-8''encoded_name
+	if idx := strings.Index(name, "''"); idx >= 0 {
+		name = name[idx+2:]
+	}
+	name = filepath.Base(filepath.Clean(name))
+	name = strings.ReplaceAll(name, string(os.PathSeparator), "_")
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "*", "_")
+	if name == "." || name == ".." {
+		return ""
+	}
+	return name
+}
+
+func (s *Service) writeVoiceAsM4A(data []byte, contentType string) (string, error) {
+	if len(data) == 0 {
+		return "", fmt.Errorf("voice data empty")
+	}
+	dir, err := s.ensureMediaDownloadDir()
+	if err != nil {
+		return "", err
+	}
+	srcExt := extensionFromContentType(contentType)
+	if srcExt == "" {
+		srcExt = voiceExtForData(data)
+	}
+	src, err := os.CreateTemp(dir, "chatlog-weixin-voice-src-*"+srcExt)
+	if err != nil {
+		return "", err
+	}
+	if _, err := src.Write(data); err != nil {
+		src.Close()
+		_ = os.Remove(src.Name())
+		return "", err
+	}
+	if err := src.Close(); err != nil {
+		_ = os.Remove(src.Name())
+		return "", err
+	}
+	dst, err := s.transcodeToM4A(src.Name())
+	_ = os.Remove(src.Name())
+	if err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+func (s *Service) transcodeToM4A(srcPath string) (string, error) {
+	dir := filepath.Dir(srcPath)
+	tmp, err := os.CreateTemp(dir, "chatlog-weixin-voice-*.m4a")
+	if err != nil {
+		return "", err
+	}
+	dstPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(dstPath)
+
+	var lastErr error
+	if ffmpeg, err := exec.LookPath("ffmpeg"); err == nil {
+		cmd := exec.Command(ffmpeg, "-y", "-loglevel", "error", "-i", srcPath, "-vn", "-c:a", "aac", "-b:a", "64k", dstPath)
+		if out, err := cmd.CombinedOutput(); err == nil {
+			return dstPath, nil
+		} else {
+			lastErr = fmt.Errorf("ffmpeg transcode failed: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	if afconvert, err := exec.LookPath("afconvert"); err == nil {
+		cmd := exec.Command(afconvert, "-f", "m4af", "-d", "aac", srcPath, dstPath)
+		if out, err := cmd.CombinedOutput(); err == nil {
+			return dstPath, nil
+		} else {
+			lastErr = fmt.Errorf("afconvert transcode failed: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	_ = os.Remove(dstPath)
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("no audio transcoder available (need ffmpeg or afconvert)")
+}
+
+func extensionFromContentType(contentType string) string {
+	ct := strings.TrimSpace(contentType)
+	if ct == "" {
+		return ""
+	}
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		mediaType = ct
+	}
+	exts, _ := mime.ExtensionsByType(mediaType)
+	for _, ext := range exts {
+		ext = strings.ToLower(strings.TrimSpace(ext))
+		if ext != "" && strings.HasPrefix(ext, ".") {
+			return ext
+		}
+	}
+	return ""
 }
 
 func (s *Service) buildTriggerMediaURL(mediaType, key string) string {
@@ -490,6 +705,10 @@ func extractTriggerMediaRef(m *model.Message) (string, []string) {
 		return "video", keys
 	case model.MessageTypeVoice:
 		keys = appendUnique(keys, get("voice"))
+		keys = appendUnique(keys, get("voice_local_id"))
+		if m.Seq > 0 {
+			keys = appendUnique(keys, fmt.Sprintf("%d", m.Seq%1000000))
+		}
 		return "voice", keys
 	case model.MessageTypeShare:
 		if m.SubType == model.MessageSubTypeFile {
