@@ -14,12 +14,12 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/sjzar/chatlog/internal/chatlog/conf"
 	"github.com/sjzar/chatlog/internal/chatlog/hermespush"
+	"github.com/sjzar/chatlog/internal/chatlog/semantic"
 	"github.com/sjzar/chatlog/internal/model"
 	"github.com/sjzar/chatlog/internal/wechatdb"
 )
@@ -37,6 +37,7 @@ type Config interface {
 	GetMessageHook() *conf.MessageHook
 	GetDataDir() string
 	GetHTTPAddr() string
+	GetSemanticConfig() *conf.SemanticConfig
 }
 
 type ContextMessage struct {
@@ -81,8 +82,7 @@ type Service struct {
 	notify     func(Event)
 	seenSeq    map[string]int64
 	startAt    time.Time
-	weixinMu   sync.Mutex
-	lastWeixin time.Time
+	semantic   *semantic.Client
 }
 
 func New(conf Config, db *wechatdb.DB, notify func(Event)) *Service {
@@ -93,6 +93,7 @@ func New(conf Config, db *wechatdb.DB, notify func(Event)) *Service {
 		notify:     notify,
 		seenSeq:    make(map[string]int64),
 		startAt:    time.Now(),
+		semantic:   semantic.NewClient(),
 	}
 }
 
@@ -331,7 +332,6 @@ func (s *Service) dispatch(cfg *conf.MessageHook, evt Event, trigger *model.Mess
 			log.Warn().Err(err).Msg("keyword hook weixin config unavailable")
 			evt.Deliveries = append(evt.Deliveries, DeliveryResult{Target: "weixin", Status: "failed", Detail: err.Error(), Success: false})
 		} else {
-			s.waitWeixinInterval(cfg.WeixinInterval)
 			mediaPaths, cleanup, mediaErr := s.resolveTriggerMedia(trigger)
 			mediaResolveDetail := ""
 			if mediaErr != nil {
@@ -362,22 +362,43 @@ func (s *Service) dispatch(cfg *conf.MessageHook, evt Event, trigger *model.Mess
 			}
 		}
 	}
-	return evt
-}
-
-func (s *Service) waitWeixinInterval(intervalSeconds int) {
-	interval := time.Duration(intervalSeconds) * time.Second
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	s.weixinMu.Lock()
-	defer s.weixinMu.Unlock()
-	if !s.lastWeixin.IsZero() {
-		if wait := time.Until(s.lastWeixin.Add(interval)); wait > 0 {
-			time.Sleep(wait)
+	if targets.QQ {
+		qqCfg, err := hermespush.DiscoverQQConfig()
+		if err != nil {
+			log.Warn().Err(err).Msg("keyword hook qq config unavailable")
+			evt.Deliveries = append(evt.Deliveries, DeliveryResult{Target: "qq", Status: "failed", Detail: err.Error(), Success: false})
+		} else {
+			mediaPaths, cleanup, mediaErr := s.resolveTriggerMedia(trigger)
+			mediaResolveDetail := ""
+			if mediaErr != nil {
+				log.Warn().Err(mediaErr).Msg("keyword hook qq media resolve failed")
+				mediaResolveDetail = mediaErr.Error()
+			}
+			if err := hermespush.SendQQ(qqCfg, hermespush.QQSendRequest{
+				Text:       buildWeixinMessage(evt),
+				MediaPaths: mediaPaths,
+			}); err != nil {
+				log.Warn().Err(err).Msg("keyword hook qq notify failed")
+				detail := err.Error()
+				if mediaResolveDetail != "" {
+					detail += "; media_resolve=" + mediaResolveDetail
+				}
+				evt.Deliveries = append(evt.Deliveries, DeliveryResult{Target: "qq", Status: "failed", Detail: detail, Success: false})
+			} else {
+				detail := ""
+				if len(mediaPaths) > 0 {
+					detail = fmt.Sprintf("media=%d", len(mediaPaths))
+				} else if mediaResolveDetail != "" {
+					detail = "media_resolve_failed=" + mediaResolveDetail
+				}
+				evt.Deliveries = append(evt.Deliveries, DeliveryResult{Target: "qq", Status: "sent", Detail: detail, Success: true})
+			}
+			for _, path := range cleanup {
+				_ = os.Remove(path)
+			}
 		}
 	}
-	s.lastWeixin = time.Now()
+	return evt
 }
 
 func (s *Service) resolveTriggerMedia(trigger *model.Message) ([]string, []string, error) {
@@ -746,6 +767,14 @@ func (s *Service) matchRules(m *model.Message, content string, keywords []string
 	out := make([]matchedRule, 0, 4)
 	if kw := matchKeyword(content, keywords); kw != "" {
 		out = append(out, matchedRule{RuleType: "keyword", RuleLabel: kw, Keyword: kw})
+	} else {
+		if kw, score := s.matchKeywordSemantic(content, keywords); kw != "" {
+			out = append(out, matchedRule{
+				RuleType:  "semantic_keyword",
+				RuleLabel: fmt.Sprintf("%s (%.3f)", kw, score),
+				Keyword:   kw,
+			})
+		}
 	}
 	talker := strings.TrimSpace(m.Talker)
 	talkerName := strings.TrimSpace(m.TalkerName)
@@ -763,6 +792,31 @@ func (s *Service) matchRules(m *model.Message, content string, keywords []string
 		}
 	}
 	return dedupeRules(out)
+}
+
+func (s *Service) matchKeywordSemantic(content string, keywords []string) (string, float64) {
+	cfg := s.conf.GetSemanticConfig()
+	if cfg == nil {
+		return "", 0
+	}
+	c := conf.NormalizeSemanticConfig(*cfg)
+	if !c.Enabled || !c.EnableSemanticPush || strings.TrimSpace(c.APIKey) == "" || len(keywords) == 0 {
+		return "", 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	rank, err := s.semantic.Rerank(ctx, c, content, keywords, 1)
+	if err != nil || len(rank) == 0 {
+		return "", 0
+	}
+	item := rank[0]
+	if item.Index < 0 || item.Index >= len(keywords) {
+		return "", 0
+	}
+	if item.Score < c.SimilarityThreshold {
+		return "", item.Score
+	}
+	return keywords[item.Index], item.Score
 }
 
 func parseTargetList(raw string) map[string]struct{} {

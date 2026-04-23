@@ -39,6 +39,7 @@ type Config interface {
 	GetPlatform() string
 	GetVersion() int
 	GetMessageHook() *conf.MessageHook
+	GetSemanticConfig() *conf.SemanticConfig
 	GetWalEnabled() bool
 }
 

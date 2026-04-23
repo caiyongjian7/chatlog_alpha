@@ -7,20 +7,21 @@ const (
 )
 
 type ServerConfig struct {
-	Type                string       `mapstructure:"type"`
-	Platform            string       `mapstructure:"platform"`
-	Version             int          `mapstructure:"version"`
-	FullVersion         string       `mapstructure:"full_version"`
-	DataDir             string       `mapstructure:"data_dir"`
-	DataKey             string       `mapstructure:"data_key"`
-	ImgKey              string       `mapstructure:"img_key"`
-	WorkDir             string       `mapstructure:"work_dir"`
-	HTTPAddr            string       `mapstructure:"http_addr"`
-	AutoDecrypt         bool         `mapstructure:"auto_decrypt"`
-	WalEnabled          bool         `mapstructure:"wal_enabled"`
-	AutoDecryptDebounce int          `mapstructure:"auto_decrypt_debounce"`
-	SaveDecryptedMedia  bool         `mapstructure:"save_decrypted_media"`
-	MessageHook         *MessageHook `mapstructure:"message_hook"`
+	Type                string          `mapstructure:"type"`
+	Platform            string          `mapstructure:"platform"`
+	Version             int             `mapstructure:"version"`
+	FullVersion         string          `mapstructure:"full_version"`
+	DataDir             string          `mapstructure:"data_dir"`
+	DataKey             string          `mapstructure:"data_key"`
+	ImgKey              string          `mapstructure:"img_key"`
+	WorkDir             string          `mapstructure:"work_dir"`
+	HTTPAddr            string          `mapstructure:"http_addr"`
+	AutoDecrypt         bool            `mapstructure:"auto_decrypt"`
+	WalEnabled          bool            `mapstructure:"wal_enabled"`
+	AutoDecryptDebounce int             `mapstructure:"auto_decrypt_debounce"`
+	SaveDecryptedMedia  bool            `mapstructure:"save_decrypted_media"`
+	MessageHook         *MessageHook    `mapstructure:"message_hook"`
+	Semantic            *SemanticConfig `mapstructure:"semantic"`
 }
 
 var ServerDefaults = map[string]any{
@@ -73,10 +74,9 @@ func (c *ServerConfig) GetHTTPAddr() string {
 func (c *ServerConfig) GetMessageHook() *MessageHook {
 	if c.MessageHook == nil {
 		c.MessageHook = &MessageHook{
-			NotifyMode:     HookNotifyMCP,
-			BeforeCount:    5,
-			AfterCount:     5,
-			WeixinInterval: 5,
+			NotifyMode:  HookNotifyMCP,
+			BeforeCount: 5,
+			AfterCount:  5,
 		}
 	}
 	return c.MessageHook
@@ -84,6 +84,48 @@ func (c *ServerConfig) GetMessageHook() *MessageHook {
 
 func (c *ServerConfig) GetSaveDecryptedMedia() bool {
 	return c.SaveDecryptedMedia
+}
+
+func (c *ServerConfig) GetSemanticConfig() *SemanticConfig {
+	if c.Semantic == nil {
+		c.Semantic = &SemanticConfig{
+			BaseURL:             DefaultGLMBaseURL,
+			EmbeddingModel:      DefaultGLMEmbedding,
+			RerankModel:         DefaultGLMRerank,
+			EmbeddingDimension:  DefaultGLMEmbeddingDim,
+			EnableRerank:        true,
+			EnableQA:            true,
+			EnableTopics:        true,
+			EnableProfiles:      true,
+			RealtimeIndex:       true,
+			IndexWorkers:        DefaultSemanticWorkers,
+			RecallK:             DefaultSemanticRecallK,
+			TopN:                DefaultSemanticTopN,
+			SimilarityThreshold: DefaultSemanticThreshold,
+		}
+	}
+	norm := NormalizeSemanticConfig(*c.Semantic)
+	norm.Enabled = true
+	norm.EnableRerank = true
+	norm.EnableSemanticPush = true
+	norm.EnableQA = true
+	norm.EnableTopics = true
+	norm.EnableProfiles = true
+	norm.RealtimeIndex = true
+	c.Semantic = &norm
+	return c.Semantic
+}
+
+func (c *ServerConfig) SetSemanticConfig(cfg SemanticConfig) {
+	norm := NormalizeSemanticConfig(cfg)
+	norm.Enabled = true
+	norm.EnableRerank = true
+	norm.EnableSemanticPush = true
+	norm.EnableQA = true
+	norm.EnableTopics = true
+	norm.EnableProfiles = true
+	norm.RealtimeIndex = true
+	c.Semantic = &norm
 }
 
 func (c *ServerConfig) SetHookKeywords(keywords string) {
@@ -115,14 +157,6 @@ func (c *ServerConfig) SetHookAfterCount(n int) {
 	}
 	cfg := c.GetMessageHook()
 	cfg.AfterCount = n
-}
-
-func (c *ServerConfig) SetHookWeixinInterval(n int) {
-	if n <= 0 {
-		n = 5
-	}
-	cfg := c.GetMessageHook()
-	cfg.WeixinInterval = n
 }
 
 func (c *ServerConfig) SetHookForwardAll(enabled bool) {

@@ -17,6 +17,7 @@ import (
 	"github.com/sjzar/chatlog/internal/chatlog/conf"
 	"github.com/sjzar/chatlog/internal/chatlog/database"
 	"github.com/sjzar/chatlog/internal/chatlog/messagehook"
+	"github.com/sjzar/chatlog/internal/chatlog/semantic"
 	"github.com/sjzar/chatlog/internal/errors"
 )
 
@@ -49,6 +50,20 @@ type Service struct {
 	hookEventCount  int64
 	hookLastEventAt string
 	hookSubscribers map[chan messagehook.Event]struct{}
+
+	statsCacheMu sync.RWMutex
+	statsCache   map[string]statsCacheEntry
+
+	semantic *semantic.Manager
+
+	semanticWatchMu      sync.Mutex
+	semanticWatchCancel  context.CancelFunc
+	semanticLastSessionN int
+}
+
+type statsCacheEntry struct {
+	Payload   gin.H
+	ExpiresAt time.Time
 }
 
 type Config interface {
@@ -67,10 +82,11 @@ type Config interface {
 	SetHookPostURL(url string)
 	SetHookBeforeCount(n int)
 	SetHookAfterCount(n int)
-	SetHookWeixinInterval(n int)
 	SetHookForwardAll(enabled bool)
 	SetHookForwardContacts(raw string)
 	SetHookForwardChatRooms(raw string)
+	GetSemanticConfig() *conf.SemanticConfig
+	SetSemanticConfig(cfg conf.SemanticConfig)
 }
 
 func NewService(conf Config, db *database.Service) *Service {
@@ -98,6 +114,13 @@ func NewService(conf Config, db *database.Service) *Service {
 		snsMediaKeyCache: make(map[string]string),
 		hookEvents:       make([]messagehook.Event, 0, 200),
 		hookSubscribers:  map[chan messagehook.Event]struct{}{},
+		statsCache:       map[string]statsCacheEntry{},
+	}
+	sem, err := semantic.NewManager(conf, db)
+	if err != nil {
+		log.Warn().Err(err).Msg("semantic manager init failed")
+	} else {
+		s.semantic = sem
 	}
 	s.loadHookEventsFromDisk()
 	s.db.SetMessageHookNotifier(s.pushMessageHookEvent)
@@ -120,6 +143,7 @@ func (s *Service) Start() error {
 			log.Err(err).Msg("Failed to start HTTP server")
 		}
 	}()
+	s.startSemanticIncrementalWatcher()
 
 	log.Info().Msg("Starting HTTP server on " + s.conf.GetHTTPAddr())
 
@@ -132,6 +156,7 @@ func (s *Service) ListenAndServe() error {
 		Addr:    s.conf.GetHTTPAddr(),
 		Handler: s.router,
 	}
+	s.startSemanticIncrementalWatcher()
 
 	log.Info().Msg("Starting HTTP server on " + s.conf.GetHTTPAddr())
 	return s.server.ListenAndServe()
@@ -142,6 +167,10 @@ func (s *Service) Stop() error {
 	if s.server == nil {
 		return nil
 	}
+	if s.semantic != nil {
+		_ = s.semantic.Close()
+	}
+	s.stopSemanticIncrementalWatcher()
 
 	// 使用超时上下文优雅关闭
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -154,6 +183,87 @@ func (s *Service) Stop() error {
 
 	log.Info().Msg("HTTP server stopped")
 	return nil
+}
+
+func (s *Service) startSemanticIncrementalWatcher() {
+	if s.semantic == nil || s.db == nil {
+		return
+	}
+	s.semanticWatchMu.Lock()
+	defer s.semanticWatchMu.Unlock()
+	if s.semanticWatchCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.semanticWatchCancel = cancel
+	go s.runSemanticIncrementalWatcher(ctx)
+}
+
+func (s *Service) stopSemanticIncrementalWatcher() {
+	s.semanticWatchMu.Lock()
+	defer s.semanticWatchMu.Unlock()
+	if s.semanticWatchCancel != nil {
+		s.semanticWatchCancel()
+		s.semanticWatchCancel = nil
+	}
+}
+
+func (s *Service) runSemanticIncrementalWatcher(ctx context.Context) {
+	const pollEvery = 3 * time.Second
+	ticker := time.NewTicker(pollEvery)
+	defer ticker.Stop()
+
+	tryIncremental := func() {
+		cfg := s.conf.GetSemanticConfig()
+		if cfg == nil || !cfg.Enabled || !cfg.RealtimeIndex {
+			return
+		}
+		if s.semantic == nil || s.db == nil {
+			return
+		}
+		sessions, err := s.db.GetSessions("", 200, 0)
+		if err != nil || sessions == nil || len(sessions.Items) == 0 {
+			return
+		}
+		latest := 0
+		for _, item := range sessions.Items {
+			if item == nil {
+				continue
+			}
+			if item.NOrder > latest {
+				latest = item.NOrder
+			}
+		}
+		if latest <= 0 {
+			return
+		}
+		// 首轮仅建立基线，避免启动时重复触发。
+		if s.semanticLastSessionN <= 0 {
+			s.semanticLastSessionN = latest
+			return
+		}
+		if latest <= s.semanticLastSessionN {
+			return
+		}
+		s.semanticLastSessionN = latest
+
+		runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		if err := s.semantic.Incremental(runCtx); err != nil {
+			log.Debug().Err(err).Msg("semantic auto incremental failed")
+		}
+	}
+
+	// 启动后先跑一次检测，后续定时增量。
+	tryIncremental()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tryIncremental()
+		}
+	}
 }
 
 func (s *Service) GetRouter() *gin.Engine {
@@ -267,6 +377,65 @@ func (s *Service) getRecentHookEvents(limit int) []messagehook.Event {
 	out := make([]messagehook.Event, 0, len(s.hookEvents)-start)
 	for i := len(s.hookEvents) - 1; i >= start; i-- {
 		out = append(out, s.hookEvents[i])
+	}
+	return out
+}
+
+func (s *Service) getStatsCache(key string) (gin.H, bool) {
+	if strings.TrimSpace(key) == "" {
+		return nil, false
+	}
+	now := time.Now()
+	s.statsCacheMu.RLock()
+	entry, ok := s.statsCache[key]
+	s.statsCacheMu.RUnlock()
+	if !ok || now.After(entry.ExpiresAt) {
+		return nil, false
+	}
+	return cloneStatsPayload(entry.Payload), true
+}
+
+func (s *Service) setStatsCache(key string, payload gin.H, ttl time.Duration) {
+	if strings.TrimSpace(key) == "" || payload == nil {
+		return
+	}
+	if ttl <= 0 {
+		ttl = 60 * time.Second
+	}
+	now := time.Now()
+	expireAt := now.Add(ttl)
+
+	s.statsCacheMu.Lock()
+	defer s.statsCacheMu.Unlock()
+	for k, item := range s.statsCache {
+		if now.After(item.ExpiresAt) {
+			delete(s.statsCache, k)
+		}
+	}
+	s.statsCache[key] = statsCacheEntry{
+		Payload:   cloneStatsPayload(payload),
+		ExpiresAt: expireAt,
+	}
+}
+
+func cloneStatsPayload(in gin.H) gin.H {
+	if in == nil {
+		return nil
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		out := make(gin.H, len(in))
+		for k, v := range in {
+			out[k] = v
+		}
+		return out
+	}
+	var out gin.H
+	if err := json.Unmarshal(raw, &out); err != nil {
+		out = make(gin.H, len(in))
+		for k, v := range in {
+			out[k] = v
+		}
 	}
 	return out
 }

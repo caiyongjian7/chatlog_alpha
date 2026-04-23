@@ -58,10 +58,10 @@ type Context struct {
 	HookPostURL          string
 	HookBeforeCount      int
 	HookAfterCount       int
-	HookWeixinInterval   int
 	HookForwardAll       bool
 	HookForwardContacts  string
 	HookForwardChatRooms string
+	Semantic             conf.SemanticConfig
 
 	// 当前选中的微信实例
 	Current *wechat.Account
@@ -122,13 +122,10 @@ func (c *Context) SwitchHistory(account string) {
 		c.HookPostURL = history.HookPostURL
 		c.HookBeforeCount = history.HookBeforeCount
 		c.HookAfterCount = history.HookAfterCount
-		c.HookWeixinInterval = history.HookWeixinInterval
-		if c.HookWeixinInterval <= 0 {
-			c.HookWeixinInterval = 5
-		}
 		c.HookForwardAll = history.HookForwardAll
 		c.HookForwardContacts = history.HookForwardContacts
 		c.HookForwardChatRooms = history.HookForwardChatRooms
+		c.Semantic = conf.NormalizeSemanticConfig(history.Semantic)
 	} else {
 		c.Account = ""
 		c.Platform = ""
@@ -147,10 +144,10 @@ func (c *Context) SwitchHistory(account string) {
 		c.HookPostURL = ""
 		c.HookBeforeCount = 5
 		c.HookAfterCount = 5
-		c.HookWeixinInterval = 5
 		c.HookForwardAll = false
 		c.HookForwardContacts = ""
 		c.HookForwardChatRooms = ""
+		c.Semantic = conf.NormalizeSemanticConfig(conf.SemanticConfig{})
 	}
 }
 
@@ -248,21 +245,30 @@ func (c *Context) GetMessageHook() *conf.MessageHook {
 	if after < 0 {
 		after = 0
 	}
-	weixinInterval := c.HookWeixinInterval
-	if weixinInterval <= 0 {
-		weixinInterval = 5
-	}
 	return &conf.MessageHook{
 		Keywords:         c.HookKeywords,
 		NotifyMode:       mode,
 		PostURL:          c.HookPostURL,
 		BeforeCount:      before,
 		AfterCount:       after,
-		WeixinInterval:   weixinInterval,
 		ForwardAll:       c.HookForwardAll,
 		ForwardContacts:  c.HookForwardContacts,
 		ForwardChatRooms: c.HookForwardChatRooms,
 	}
+}
+
+func (c *Context) GetSemanticConfig() *conf.SemanticConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	cfg := conf.NormalizeSemanticConfig(c.Semantic)
+	cfg.Enabled = true
+	cfg.EnableRerank = true
+	cfg.EnableSemanticPush = true
+	cfg.EnableQA = true
+	cfg.EnableTopics = true
+	cfg.EnableProfiles = true
+	cfg.RealtimeIndex = true
+	return &cfg
 }
 
 func (c *Context) GetSaveDecryptedMedia() bool {
@@ -409,19 +415,6 @@ func (c *Context) SetHookAfterCount(n int) {
 	c.UpdateConfig()
 }
 
-func (c *Context) SetHookWeixinInterval(n int) {
-	if n <= 0 {
-		n = 5
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.HookWeixinInterval == n {
-		return
-	}
-	c.HookWeixinInterval = n
-	c.UpdateConfig()
-}
-
 func (c *Context) SetHookForwardAll(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -454,6 +447,21 @@ func (c *Context) SetHookForwardChatRooms(raw string) {
 	c.UpdateConfig()
 }
 
+func (c *Context) SetSemanticConfig(cfg conf.SemanticConfig) {
+	cfg = conf.NormalizeSemanticConfig(cfg)
+	cfg.Enabled = true
+	cfg.EnableRerank = true
+	cfg.EnableSemanticPush = true
+	cfg.EnableQA = true
+	cfg.EnableTopics = true
+	cfg.EnableProfiles = true
+	cfg.RealtimeIndex = true
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Semantic = cfg
+	c.UpdateConfig()
+}
+
 // 更新配置
 func (c *Context) UpdateConfig() {
 
@@ -476,10 +484,10 @@ func (c *Context) UpdateConfig() {
 		HookPostURL:          c.HookPostURL,
 		HookBeforeCount:      c.HookBeforeCount,
 		HookAfterCount:       c.HookAfterCount,
-		HookWeixinInterval:   c.HookWeixinInterval,
 		HookForwardAll:       c.HookForwardAll,
 		HookForwardContacts:  c.HookForwardContacts,
 		HookForwardChatRooms: c.HookForwardChatRooms,
+		Semantic:             conf.NormalizeSemanticConfig(c.Semantic),
 	}
 
 	if c.conf.History == nil {

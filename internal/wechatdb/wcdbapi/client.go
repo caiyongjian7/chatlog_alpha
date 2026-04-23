@@ -329,12 +329,12 @@ func (c *Client) GetMessagesInRange(username string, since, until int64, limit, 
 	perDBLimit := 0
 	if limit > 0 {
 		perDBLimit = limit + offset
-	}
-	if perDBLimit <= 0 {
-		perDBLimit = 5000
-	}
-	if perDBLimit > 50000 {
-		perDBLimit = 50000
+		if perDBLimit <= 0 {
+			perDBLimit = 5000
+		}
+		if perDBLimit > 50000 {
+			perDBLimit = 50000
+		}
 	}
 
 	var out []map[string]interface{}
@@ -357,8 +357,10 @@ FROM [%s] m
 LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
 %s
 ORDER BY m.create_time DESC
-LIMIT %d OFFSET 0
-`, tableName, whereSQL, perDBLimit)
+`, tableName, whereSQL)
+		if perDBLimit > 0 {
+			sql += fmt.Sprintf("LIMIT %d OFFSET 0\n", perDBLimit)
+		}
 		rows, err := queryRows(item.decPath, sql)
 		if err != nil {
 			continue

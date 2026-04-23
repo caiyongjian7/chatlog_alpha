@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"embed"
 	"encoding/csv"
 	"encoding/json"
@@ -62,7 +63,13 @@ func (s *Service) initBaseRouter() {
 	s.router.POST("/api/v1/hook/events/clear", s.handleHookEventsClear)
 	s.router.GET("/api/v1/hook/hermes/weixin", s.handleHookHermesWeixinGet)
 	s.router.POST("/api/v1/hook/hermes/weixin", s.handleHookHermesWeixinSet)
+	s.router.GET("/api/v1/hook/hermes/qq", s.handleHookHermesQQGet)
+	s.router.POST("/api/v1/hook/hermes/qq", s.handleHookHermesQQSet)
 	s.router.GET("/api/v1/hook/stream", s.handleHookStream)
+	s.router.GET("/api/v1/semantic/config", s.handleSemanticConfigGet)
+	s.router.POST("/api/v1/semantic/config", s.handleSemanticConfigSet)
+	s.router.POST("/api/v1/semantic/test", s.handleSemanticTest)
+	s.router.GET("/api/v1/semantic/index/status", s.handleSemanticIndexStatus)
 
 	s.router.NoRoute(s.NoRoute)
 }
@@ -98,6 +105,12 @@ func (s *Service) initAPIRouter() {
 		api.GET("/db/data", s.handleGetDBTableData)
 		api.GET("/db/query", s.handleExecuteSQL)
 		api.POST("/cache/clear", s.handleClearCache)
+		api.POST("/semantic/index/rebuild", s.handleSemanticRebuild)
+		api.POST("/semantic/index/clear", s.handleSemanticClear)
+		api.GET("/semantic/search", s.handleSemanticSearch)
+		api.POST("/semantic/qa", s.handleSemanticQA)
+		api.GET("/semantic/topics", s.handleSemanticTopics)
+		api.GET("/semantic/profiles", s.handleSemanticProfiles)
 	}
 }
 
@@ -116,7 +129,6 @@ func (s *Service) handleHookConfigGet(c *gin.Context) {
 		"post_url":          strings.TrimSpace(cfg.PostURL),
 		"before_count":      cfg.BeforeCount,
 		"after_count":       cfg.AfterCount,
-		"weixin_interval":   maxHookWeixinInterval(cfg.WeixinInterval),
 		"forward_all":       cfg.ForwardAll,
 		"forward_contacts":  strings.TrimSpace(cfg.ForwardContacts),
 		"forward_chatrooms": strings.TrimSpace(cfg.ForwardChatRooms),
@@ -129,7 +141,6 @@ type hookConfigReq struct {
 	PostURL          string `json:"post_url"`
 	BeforeCount      int    `json:"before_count"`
 	AfterCount       int    `json:"after_count"`
-	WeixinInterval   int    `json:"weixin_interval"`
 	ForwardAll       bool   `json:"forward_all"`
 	ForwardContacts  string `json:"forward_contacts"`
 	ForwardChatRooms string `json:"forward_chatrooms"`
@@ -154,9 +165,6 @@ func (s *Service) handleHookConfigSet(c *gin.Context) {
 		errors.Err(c, errors.InvalidArg("after_count"))
 		return
 	}
-	if req.WeixinInterval <= 0 {
-		req.WeixinInterval = 5
-	}
 	mode := conf.CanonicalHookNotifyMode(req.NotifyMode)
 	targets, _ := conf.ParseHookNotifyTargets(mode)
 	if targets.Weixin {
@@ -167,6 +175,17 @@ func (s *Service) handleHookConfigSet(c *gin.Context) {
 		}
 		if _, err := hermespush.DiscoverWeixinConfig(); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Hermes agent 未完成微信渠道配置: " + err.Error()})
+			return
+		}
+	}
+	if targets.QQ {
+		install := hermespush.DetectInstallation()
+		if !install.Installed {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Hermes agent 未安装，无法启用 qq 推送"})
+			return
+		}
+		if _, err := hermespush.DiscoverQQConfig(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Hermes agent 未完成 QQ 渠道配置: " + err.Error()})
 			return
 		}
 	}
@@ -184,11 +203,600 @@ func (s *Service) handleHookConfigSet(c *gin.Context) {
 	s.conf.SetHookPostURL(strings.TrimSpace(req.PostURL))
 	s.conf.SetHookBeforeCount(req.BeforeCount)
 	s.conf.SetHookAfterCount(req.AfterCount)
-	s.conf.SetHookWeixinInterval(req.WeixinInterval)
 	s.conf.SetHookForwardAll(req.ForwardAll)
 	s.conf.SetHookForwardContacts(forwardContacts)
 	s.conf.SetHookForwardChatRooms(forwardChatRooms)
 	s.handleHookConfigGet(c)
+}
+
+type semanticConfigReq struct {
+	Enabled             bool    `json:"enabled"`
+	APIKey              string  `json:"api_key"`
+	BaseURL             string  `json:"base_url"`
+	EmbeddingModel      string  `json:"embedding_model"`
+	RerankModel         string  `json:"rerank_model"`
+	EmbeddingDimension  int     `json:"embedding_dimension"`
+	EnableRerank        bool    `json:"enable_rerank"`
+	EnableSemanticPush  bool    `json:"enable_semantic_push"`
+	EnableQA            bool    `json:"enable_qa"`
+	EnableTopics        bool    `json:"enable_topics"`
+	EnableProfiles      bool    `json:"enable_profiles"`
+	RealtimeIndex       bool    `json:"realtime_index"`
+	IndexWorkers        int     `json:"index_workers"`
+	RecallK             int     `json:"recall_k"`
+	TopN                int     `json:"top_n"`
+	SimilarityThreshold float64 `json:"similarity_threshold"`
+}
+
+func (s *Service) handleSemanticConfigGet(c *gin.Context) {
+	cfg := s.conf.GetSemanticConfig()
+	if cfg == nil {
+		cfg = &conf.SemanticConfig{}
+	}
+	norm := conf.NormalizeSemanticConfig(*cfg)
+	writeByFormat(c, gin.H{
+		"enabled":              norm.Enabled,
+		"api_key":              "",
+		"has_api_key":          strings.TrimSpace(norm.APIKey) != "",
+		"base_url":             norm.BaseURL,
+		"embedding_model":      norm.EmbeddingModel,
+		"rerank_model":         norm.RerankModel,
+		"embedding_dimension":  norm.EmbeddingDimension,
+		"enable_rerank":        norm.EnableRerank,
+		"enable_semantic_push": norm.EnableSemanticPush,
+		"enable_qa":            norm.EnableQA,
+		"enable_topics":        norm.EnableTopics,
+		"enable_profiles":      norm.EnableProfiles,
+		"realtime_index":       norm.RealtimeIndex,
+		"index_workers":        norm.IndexWorkers,
+		"recall_k":             norm.RecallK,
+		"top_n":                norm.TopN,
+		"similarity_threshold": norm.SimilarityThreshold,
+	}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticConfigSet(c *gin.Context) {
+	var req semanticConfigReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errors.Err(c, errors.InvalidArg("body"))
+		return
+	}
+	cfg := conf.NormalizeSemanticConfig(conf.SemanticConfig{
+		Enabled:             true,
+		APIKey:              strings.TrimSpace(req.APIKey),
+		BaseURL:             strings.TrimSpace(req.BaseURL),
+		EmbeddingModel:      strings.TrimSpace(req.EmbeddingModel),
+		RerankModel:         strings.TrimSpace(req.RerankModel),
+		EmbeddingDimension:  req.EmbeddingDimension,
+		EnableRerank:        true,
+		EnableSemanticPush:  true,
+		EnableQA:            true,
+		EnableTopics:        true,
+		EnableProfiles:      true,
+		RealtimeIndex:       true,
+		IndexWorkers:        req.IndexWorkers,
+		RecallK:             req.RecallK,
+		TopN:                req.TopN,
+		SimilarityThreshold: req.SimilarityThreshold,
+	})
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		if old := s.conf.GetSemanticConfig(); old != nil {
+			cfg.APIKey = strings.TrimSpace(old.APIKey)
+		}
+	}
+	if s.semantic == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "semantic manager unavailable"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	if err := s.semantic.TestConnection(ctx, cfg); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "GLM 连通性测试失败: " + err.Error()})
+		return
+	}
+	s.conf.SetSemanticConfig(cfg)
+	s.handleSemanticConfigGet(c)
+}
+
+func (s *Service) handleSemanticTest(c *gin.Context) {
+	cfg := conf.SemanticConfig{}
+	if cur := s.conf.GetSemanticConfig(); cur != nil {
+		cfg = *cur
+	}
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		// body optional: if empty, use saved config
+	}
+	cfg = conf.NormalizeSemanticConfig(cfg)
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		if old := s.conf.GetSemanticConfig(); old != nil {
+			cfg.APIKey = strings.TrimSpace(old.APIKey)
+		}
+	}
+	if s.semantic == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "semantic manager unavailable"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	if err := s.semantic.TestConnection(ctx, cfg); err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Service) handleSemanticIndexStatus(c *gin.Context) {
+	if s.semantic == nil {
+		writeByFormat(c, gin.H{
+			"ready":   false,
+			"enabled": false,
+			"error":   "semantic manager unavailable",
+		}, c.Query("format"))
+		return
+	}
+	writeByFormat(c, s.semantic.Status(), c.Query("format"))
+}
+
+func (s *Service) handleSemanticRebuild(c *gin.Context) {
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	reset := strings.EqualFold(strings.TrimSpace(c.Query("reset")), "1") ||
+		strings.EqualFold(strings.TrimSpace(c.Query("reset")), "true")
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Minute)
+	defer cancel()
+	if err := s.semantic.Rebuild(ctx, reset); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	writeByFormat(c, gin.H{"ok": true, "status": s.semantic.Status()}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticClear(c *gin.Context) {
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	if err := s.semantic.Clear(); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	writeByFormat(c, gin.H{"ok": true, "status": s.semantic.Status()}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticSearch(c *gin.Context) {
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	if err := s.ensureSemanticIndexReady(); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	query := strings.TrimSpace(c.Query("query"))
+	if query == "" {
+		query = strings.TrimSpace(c.Query("keyword"))
+	}
+	if query == "" {
+		errors.Err(c, errors.InvalidArg("query"))
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit <= 0 {
+		limit = 20
+	}
+	rerank := strings.EqualFold(strings.TrimSpace(c.DefaultQuery("rerank", "1")), "1") ||
+		strings.EqualFold(strings.TrimSpace(c.Query("rerank")), "true")
+	talker := strings.TrimSpace(c.Query("chat"))
+	hits, err := s.semantic.Search(c.Request.Context(), query, talker, limit, rerank)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	writeByFormat(c, gin.H{
+		"query":   query,
+		"chat":    talker,
+		"count":   len(hits),
+		"rerank":  rerank,
+		"results": hits,
+	}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticQA(c *gin.Context) {
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	if err := s.ensureSemanticIndexReady(); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	var req struct {
+		Query string `json:"query"`
+		Chat  string `json:"chat"`
+		TopN  int    `json:"top_n"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errors.Err(c, errors.InvalidArg("body"))
+		return
+	}
+	req.Query = strings.TrimSpace(req.Query)
+	if req.Query == "" {
+		errors.Err(c, errors.InvalidArg("query"))
+		return
+	}
+	if req.TopN <= 0 {
+		req.TopN = 8
+	}
+	hits, err := s.semantic.Search(c.Request.Context(), req.Query, strings.TrimSpace(req.Chat), req.TopN, true)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	answer := "未找到足够证据。"
+	if len(hits) > 0 {
+		lines := make([]string, 0, len(hits))
+		for i, item := range hits {
+			ts := time.Unix(item.Time, 0).Format("2006-01-02 15:04:05")
+			lines = append(lines, fmt.Sprintf("%d. [%s][%s/%s] %s", i+1, ts, pickText(item.TalkerName, item.Talker), pickText(item.SenderName, item.Sender), singleLineText(item.Content)))
+		}
+		answer = "基于聊天记录检索到以下证据（按相关性排序）：\n" + strings.Join(lines, "\n")
+	}
+	writeByFormat(c, gin.H{
+		"query":    req.Query,
+		"chat":     req.Chat,
+		"count":    len(hits),
+		"answer":   answer,
+		"evidence": hits,
+	}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticTopics(c *gin.Context) {
+	if err := s.ensureSemanticIndexReady(); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	chat := strings.TrimSpace(c.Query("chat"))
+	windowKey, windowLabel, start, end := parseSemanticWindow(c.Query("window"))
+	msgs, truncated, err := s.collectSemanticMessages(chat, start, end)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	topics := summarizeTopics(msgs, 50)
+	daily := summarizeDailyMessages(msgs, start, end)
+	writeByFormat(c, gin.H{
+		"chat":         chat,
+		"window":       windowKey,
+		"window_label": windowLabel,
+		"from":         formatWindowTime(start),
+		"to":           formatWindowTime(end),
+		"count":        len(msgs),
+		"truncated":    truncated,
+		"topics":       topics,
+		"daily":        daily,
+	}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticProfiles(c *gin.Context) {
+	if err := s.ensureSemanticIndexReady(); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	chat := strings.TrimSpace(c.Query("chat"))
+	windowKey, windowLabel, start, end := parseSemanticWindow(c.Query("window"))
+	msgs, truncated, err := s.collectSemanticMessages(chat, start, end)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	type prof struct {
+		Sender      string           `json:"sender"`
+		SenderName  string           `json:"sender_name"`
+		Messages    int              `json:"messages"`
+		TopKeywords []map[string]any `json:"top_keywords"`
+	}
+	counts := map[string]int{}
+	names := map[string]string{}
+	texts := map[string][]string{}
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		sender := strings.TrimSpace(m.Sender)
+		if sender == "" {
+			continue
+		}
+		counts[sender]++
+		if n := strings.TrimSpace(m.SenderName); n != "" {
+			names[sender] = n
+		}
+		if txt := strings.TrimSpace(m.PlainTextContent()); txt != "" {
+			texts[sender] = append(texts[sender], txt)
+		}
+	}
+	list := make([]prof, 0, len(counts))
+	typeDist := map[string]int{}
+	for sender, n := range counts {
+		list = append(list, prof{
+			Sender:      sender,
+			SenderName:  pickText(names[sender], sender),
+			Messages:    n,
+			TopKeywords: topWords(texts[sender], 6),
+		})
+	}
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		typeDist[strconv.FormatInt(m.Type, 10)]++
+	}
+	typeRows := make([]map[string]any, 0, len(typeDist))
+	for t, n := range typeDist {
+		typeRows = append(typeRows, map[string]any{
+			"type":  t,
+			"count": n,
+		})
+	}
+	sort.Slice(typeRows, func(i, j int) bool {
+		return toInt64(typeRows[i]["count"]) > toInt64(typeRows[j]["count"])
+	})
+	sort.Slice(list, func(i, j int) bool { return list[i].Messages > list[j].Messages })
+	writeByFormat(c, gin.H{
+		"chat":              chat,
+		"window":            windowKey,
+		"window_label":      windowLabel,
+		"from":              formatWindowTime(start),
+		"to":                formatWindowTime(end),
+		"count":             len(msgs),
+		"truncated":         truncated,
+		"profiles":          list,
+		"type_distribution": typeRows,
+	}, c.Query("format"))
+}
+
+func (s *Service) collectSemanticMessages(chat string, start, end time.Time) ([]*model.Message, bool, error) {
+	const maxSemanticAnalyticsMessages = 200000
+	chat = strings.TrimSpace(chat)
+	if chat != "" {
+		msgs, err := s.db.GetMessages(start, end, chat, "", "", 0, 0)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(msgs) > maxSemanticAnalyticsMessages {
+			return msgs[:maxSemanticAnalyticsMessages], true, nil
+		}
+		return msgs, false, nil
+	}
+	sessions, err := s.db.GetSessions("", 2000, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	if sessions == nil || len(sessions.Items) == 0 {
+		return nil, false, nil
+	}
+	all := make([]*model.Message, 0, 4096)
+	truncated := false
+	for _, sess := range sessions.Items {
+		if sess == nil || strings.TrimSpace(sess.UserName) == "" {
+			continue
+		}
+		items, err := s.db.GetMessages(start, end, strings.TrimSpace(sess.UserName), "", "", 0, 0)
+		if err != nil {
+			continue
+		}
+		all = append(all, items...)
+		if len(all) >= maxSemanticAnalyticsMessages {
+			all = all[:maxSemanticAnalyticsMessages]
+			truncated = true
+			break
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Seq > all[j].Seq })
+	return all, truncated, nil
+}
+
+func parseStartEndTime(c *gin.Context) (time.Time, time.Time) {
+	start, end, _, err := parseSinceUntil(
+		strings.TrimSpace(c.Query("time")),
+		strings.TrimSpace(c.Query("since")),
+		strings.TrimSpace(c.Query("until")),
+	)
+	if err != nil {
+		return time.Time{}, time.Time{}
+	}
+	return start, end
+}
+
+func (s *Service) ensureSemanticIndexReady() error {
+	if s.semantic == nil {
+		return fmt.Errorf("semantic manager unavailable")
+	}
+	st := s.semantic.Status()
+	if st.Running {
+		return fmt.Errorf("semantic index is building, please wait")
+	}
+	if st.IndexedCount <= 0 {
+		return fmt.Errorf("semantic index is empty, please build index first")
+	}
+	if st.Pending > 0 || st.Failed > 0 {
+		return fmt.Errorf("semantic index not ready: pending=%d failed=%d", st.Pending, st.Failed)
+	}
+	return nil
+}
+
+func summarizeTopics(msgs []*model.Message, topN int) []map[string]any {
+	texts := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		txt := strings.TrimSpace(m.PlainTextContent())
+		if txt == "" {
+			txt = strings.TrimSpace(m.Content)
+		}
+		if txt != "" {
+			texts = append(texts, txt)
+		}
+	}
+	return topWords(texts, topN)
+}
+
+func topWords(texts []string, topN int) []map[string]any {
+	counter := map[string]int{}
+	for _, text := range texts {
+		for _, token := range splitTopicTokens(text) {
+			counter[token]++
+		}
+	}
+	type kv struct {
+		Key string
+		Val int
+	}
+	rows := make([]kv, 0, len(counter))
+	for k, v := range counter {
+		rows = append(rows, kv{k, v})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Val > rows[j].Val })
+	if topN <= 0 {
+		topN = 10
+	}
+	if len(rows) > topN {
+		rows = rows[:topN]
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, item := range rows {
+		out = append(out, map[string]any{
+			"topic": item.Key,
+			"count": item.Val,
+		})
+	}
+	return out
+}
+
+func splitTopicTokens(text string) []string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	replacer := strings.NewReplacer(
+		"\n", " ", "\r", " ", "\t", " ",
+		"，", " ", "。", " ", "；", " ", "：", " ", "！", " ", "？", " ",
+		",", " ", ".", " ", ";", " ", ":", " ", "!", " ", "?", " ",
+		"(", " ", ")", " ", "[", " ", "]", " ", "{", " ", "}", " ",
+		"\"", " ", "'", " ", "`", " ",
+	)
+	text = replacer.Replace(text)
+	parts := strings.Fields(text)
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len([]rune(part)) < 2 {
+			continue
+		}
+		if len([]rune(part)) > 24 {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func parseSemanticWindow(raw string) (string, string, time.Time, time.Time) {
+	now := time.Now()
+	loc := now.Location()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	switch raw {
+	case "", "today", "1d":
+		return "today", "今天", todayStart, now
+	case "7d", "week":
+		return "7d", "近7天", todayStart.AddDate(0, 0, -6), now
+	case "30d", "month", "1m":
+		return "30d", "近1月", todayStart.AddDate(0, 0, -29), now
+	case "all":
+		return "all", "全部", time.Time{}, time.Time{}
+	default:
+		return "today", "今天", todayStart, now
+	}
+}
+
+func formatWindowTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
+func summarizeDailyMessages(msgs []*model.Message, start, end time.Time) []map[string]any {
+	type row struct {
+		Date  string
+		Count int
+	}
+	counter := map[string]int{}
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		day := m.Time.Format("2006-01-02")
+		counter[day]++
+	}
+	out := make([]row, 0, len(counter))
+	for d, n := range counter {
+		out = append(out, row{Date: d, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
+
+	// Ensure contiguous day axis for bounded windows.
+	if !start.IsZero() && !end.IsZero() {
+		loc := start.Location()
+		cur := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+		last := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, loc)
+		filled := make([]row, 0, int(last.Sub(cur).Hours()/24)+1)
+		existing := map[string]int{}
+		for _, r := range out {
+			existing[r.Date] = r.Count
+		}
+		for !cur.After(last) {
+			d := cur.Format("2006-01-02")
+			filled = append(filled, row{Date: d, Count: existing[d]})
+			cur = cur.AddDate(0, 0, 1)
+		}
+		out = filled
+	}
+
+	resp := make([]map[string]any, 0, len(out))
+	for _, r := range out {
+		resp = append(resp, map[string]any{
+			"date":  r.Date,
+			"count": r.Count,
+		})
+	}
+	return resp
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func pickText(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func singleLineText(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) > 200 {
+		return string([]rune(s)[:200]) + "..."
+	}
+	return s
 }
 
 type hookHermesWeixinReq struct {
@@ -197,6 +805,14 @@ type hookHermesWeixinReq struct {
 	Token           string `json:"token"`
 	BaseURL         string `json:"base_url"`
 	CdnBaseURL      string `json:"cdn_base_url"`
+	HomeChannel     string `json:"home_channel"`
+	HomeChannelName string `json:"home_channel_name"`
+}
+
+type hookHermesQQReq struct {
+	HermesHome      string `json:"hermes_home"`
+	AppID           string `json:"app_id"`
+	ClientSecret    string `json:"client_secret"`
 	HomeChannel     string `json:"home_channel"`
 	HomeChannelName string `json:"home_channel_name"`
 }
@@ -256,6 +872,54 @@ func (s *Service) handleHookHermesWeixinSet(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+func (s *Service) handleHookHermesQQGet(c *gin.Context) {
+	mode := ""
+	if cfg := s.conf.GetMessageHook(); cfg != nil {
+		mode = conf.CanonicalHookNotifyMode(cfg.NotifyMode)
+	}
+	status := s.getHermesQQStatus(mode)
+	c.JSON(http.StatusOK, status)
+}
+
+func (s *Service) handleHookHermesQQSet(c *gin.Context) {
+	var req hookHermesQQReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errors.Err(c, errors.InvalidArg("body"))
+		return
+	}
+	install := hermespush.DetectInstallation()
+	if !install.Installed {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Hermes agent 未安装，无法保存 QQ 渠道配置"})
+		return
+	}
+	if _, err := hermespush.DiscoverQQConfig(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "当前无法读取 Hermes QQ 配置，已禁止编辑: " + err.Error()})
+		return
+	}
+	cfg, err := hermespush.SaveQQConfig(hermespush.QQConfig{
+		HermesHome:      strings.TrimSpace(req.HermesHome),
+		AppID:           strings.TrimSpace(req.AppID),
+		ClientSecret:    strings.TrimSpace(req.ClientSecret),
+		HomeChannel:     strings.TrimSpace(req.HomeChannel),
+		HomeChannelName: strings.TrimSpace(req.HomeChannelName),
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	status := s.getHermesQQStatus("")
+	status.Available = true
+	status.Editable = cfg.EnvFile != "" || cfg.ConfigFile != ""
+	status.HermesHome = cfg.HermesHome
+	status.EnvFile = cfg.EnvFile
+	status.ConfigFile = cfg.ConfigFile
+	status.AppID = cfg.AppID
+	status.ClientSecret = cfg.ClientSecret
+	status.HomeChannel = cfg.HomeChannel
+	status.HomeChannelName = cfg.HomeChannelName
+	c.JSON(http.StatusOK, status)
+}
+
 func splitHookKeywords(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -288,7 +952,6 @@ func (s *Service) handleHookStatus(c *gin.Context) {
 	postURL := ""
 	before := 5
 	after := 5
-	weixinInterval := 5
 	keywordsRaw := ""
 	forwardAll := false
 	forwardContacts := ""
@@ -304,7 +967,6 @@ func (s *Service) handleHookStatus(c *gin.Context) {
 		if cfg.AfterCount >= 0 {
 			after = cfg.AfterCount
 		}
-		weixinInterval = maxHookWeixinInterval(cfg.WeixinInterval)
 		forwardAll = cfg.ForwardAll
 		forwardContacts = strings.TrimSpace(cfg.ForwardContacts)
 		forwardChatRooms = strings.TrimSpace(cfg.ForwardChatRooms)
@@ -318,7 +980,6 @@ func (s *Service) handleHookStatus(c *gin.Context) {
 		"post_url":                postURL,
 		"before_count":            before,
 		"after_count":             after,
-		"weixin_interval":         weixinInterval,
 		"forward_all":             forwardAll,
 		"forward_contacts":        splitHookTargets(forwardContacts),
 		"forward_contacts_raw":    forwardContacts,
@@ -330,14 +991,8 @@ func (s *Service) handleHookStatus(c *gin.Context) {
 		"last_event_at":           lastEventAt,
 		"events_store_file":       s.hookEventsStorePath(),
 		"weixin":                  s.getHermesWeixinStatus(mode),
+		"qq":                      s.getHermesQQStatus(mode),
 	})
-}
-
-func maxHookWeixinInterval(v int) int {
-	if v <= 0 {
-		return 5
-	}
-	return v
 }
 
 func splitHookTargets(raw string) []string {
@@ -637,7 +1292,231 @@ func filterByMsgType(messages []*model.Message, msgType int64) []*model.Message 
 	return out
 }
 
+func parseOptionalBool(raw string) (*bool, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return nil, nil
+	}
+	switch v {
+	case "1", "true", "yes", "y":
+		b := true
+		return &b, nil
+	case "0", "false", "no", "n":
+		b := false
+		return &b, nil
+	default:
+		return nil, errors.InvalidArg(raw)
+	}
+}
+
+func parseOptionalHour(raw string) (int, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return -1, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return -1, errors.InvalidArg("hour")
+	}
+	if n < 0 || n > 23 {
+		return -1, errors.InvalidArg("hour")
+	}
+	return n, nil
+}
+
+func filterHistoryMessages(messages []*model.Message, msgType, subType int64, hour int, isSelf, hasMedia *bool) []*model.Message {
+	out := make([]*model.Message, 0, len(messages))
+	for _, m := range messages {
+		if m == nil {
+			continue
+		}
+		if msgType != 0 && m.Type != msgType {
+			continue
+		}
+		if subType != 0 && m.SubType != subType {
+			continue
+		}
+		if hour >= 0 && m.Time.Hour() != hour {
+			continue
+		}
+		if isSelf != nil && m.IsSelf != *isSelf {
+			continue
+		}
+		if hasMedia != nil {
+			mediaType, keys := extractMediaRef(m)
+			has := mediaType != "" && len(keys) > 0
+			if has != *hasMedia {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func paginateMessages(messages []*model.Message, limit, offset int) []*model.Message {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(messages) {
+		return []*model.Message{}
+	}
+	if offset > 0 {
+		messages = messages[offset:]
+	}
+	if limit > 0 && len(messages) > limit {
+		messages = messages[:limit]
+	}
+	return messages
+}
+
+func paginateRows(rows []gin.H, limit, offset int) []gin.H {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(rows) {
+		return []gin.H{}
+	}
+	if offset > 0 {
+		rows = rows[offset:]
+	}
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
+type historyMessageOut struct {
+	Timestamp int64    `json:"timestamp" yaml:"timestamp"`
+	Time      string   `json:"time,omitempty" yaml:"time,omitempty"`
+	Sender    string   `json:"sender,omitempty" yaml:"sender,omitempty"`
+	Type      string   `json:"type,omitempty" yaml:"type,omitempty"`
+	Content   string   `json:"content,omitempty" yaml:"content,omitempty"`
+	LocalID   int64    `json:"local_id,omitempty" yaml:"local_id,omitempty"`
+	MediaType string   `json:"media_type,omitempty" yaml:"media_type,omitempty"`
+	MediaKey  string   `json:"media_key,omitempty" yaml:"media_key,omitempty"`
+	MediaKeys []string `json:"media_keys,omitempty" yaml:"media_keys,omitempty"`
+	MediaPath string   `json:"media_path,omitempty" yaml:"media_path,omitempty"`
+	MediaURL  string   `json:"media_url,omitempty" yaml:"media_url,omitempty"`
+	ImageKey  string   `json:"image_key,omitempty" yaml:"image_key,omitempty"`
+	ImageKeys []string `json:"image_keys,omitempty" yaml:"image_keys,omitempty"`
+	ImagePath string   `json:"image_path,omitempty" yaml:"image_path,omitempty"`
+	ImageURL  string   `json:"image_url,omitempty" yaml:"image_url,omitempty"`
+	Chat      string   `json:"chat,omitempty" yaml:"chat,omitempty"`
+	UserName  string   `json:"username,omitempty" yaml:"username,omitempty"`
+	IsGroup   bool     `json:"is_group,omitempty" yaml:"is_group,omitempty"`
+	ChatType  string   `json:"chat_type,omitempty" yaml:"chat_type,omitempty"`
+}
+
+type historyResponse struct {
+	Chat       string              `json:"chat,omitempty" yaml:"chat,omitempty"`
+	UserName   string              `json:"username,omitempty" yaml:"username,omitempty"`
+	IsGroup    bool                `json:"is_group" yaml:"is_group"`
+	ChatType   string              `json:"chat_type,omitempty" yaml:"chat_type,omitempty"`
+	TotalCount int                 `json:"total_count" yaml:"total_count"`
+	Count      int                 `json:"count" yaml:"count"`
+	Limit      int                 `json:"limit,omitempty" yaml:"limit,omitempty"`
+	Offset     int                 `json:"offset,omitempty" yaml:"offset,omitempty"`
+	Messages   []historyMessageOut `json:"messages" yaml:"messages"`
+}
+
+type searchResponse struct {
+	TotalCount int                 `json:"total_count" yaml:"total_count"`
+	Count      int                 `json:"count" yaml:"count"`
+	Limit      int                 `json:"limit,omitempty" yaml:"limit,omitempty"`
+	Offset     int                 `json:"offset,omitempty" yaml:"offset,omitempty"`
+	Messages   []historyMessageOut `json:"messages" yaml:"messages"`
+}
+
+type statsCountByType struct {
+	Type  string `json:"type" yaml:"type"`
+	Count int64  `json:"count" yaml:"count"`
+}
+
+type statsCountBySender struct {
+	Sender string `json:"sender" yaml:"sender"`
+	Count  int64  `json:"count" yaml:"count"`
+}
+
+type statsCountByHour struct {
+	Hour  int `json:"hour" yaml:"hour"`
+	Count int `json:"count" yaml:"count"`
+}
+
+type statsResponse struct {
+	Chat             string               `json:"chat" yaml:"chat"`
+	UserName         string               `json:"username" yaml:"username"`
+	IsGroup          bool                 `json:"is_group" yaml:"is_group"`
+	ChatType         string               `json:"chat_type" yaml:"chat_type"`
+	Total            int                  `json:"total" yaml:"total"`
+	SentCount        int                  `json:"sent_count" yaml:"sent_count"`
+	ReceivedCount    int                  `json:"received_count" yaml:"received_count"`
+	ActiveSenders    int                  `json:"active_senders" yaml:"active_senders"`
+	ActiveDays       int                  `json:"active_days" yaml:"active_days"`
+	FirstMessageTime int64                `json:"first_message_time" yaml:"first_message_time"`
+	LastMessageTime  int64                `json:"last_message_time" yaml:"last_message_time"`
+	QuerySince       int64                `json:"query_since" yaml:"query_since"`
+	QueryUntil       int64                `json:"query_until" yaml:"query_until"`
+	QueryRangeLabel  string               `json:"query_range_label" yaml:"query_range_label"`
+	ByType           []statsCountByType   `json:"by_type" yaml:"by_type"`
+	TopSenders       []statsCountBySender `json:"top_senders" yaml:"top_senders"`
+	ByHour           []statsCountByHour   `json:"by_hour" yaml:"by_hour"`
+}
+
+func toStringSlice(v any) []string {
+	switch x := v.(type) {
+	case []string:
+		return x
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, item := range x {
+			s := strings.TrimSpace(toString(item))
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func toHistoryMessageOut(row gin.H) historyMessageOut {
+	return historyMessageOut{
+		Timestamp: toInt64(row["timestamp"]),
+		Time:      strings.TrimSpace(toString(row["time"])),
+		Sender:    strings.TrimSpace(toString(row["sender"])),
+		Type:      strings.TrimSpace(toString(row["type"])),
+		Content:   toString(row["content"]),
+		LocalID:   toInt64(row["local_id"]),
+		MediaType: strings.TrimSpace(toString(row["media_type"])),
+		MediaKey:  strings.TrimSpace(toString(row["media_key"])),
+		MediaKeys: toStringSlice(row["media_keys"]),
+		MediaPath: strings.TrimSpace(toString(row["media_path"])),
+		MediaURL:  strings.TrimSpace(toString(row["media_url"])),
+		ImageKey:  strings.TrimSpace(toString(row["image_key"])),
+		ImageKeys: toStringSlice(row["image_keys"]),
+		ImagePath: strings.TrimSpace(toString(row["image_path"])),
+		ImageURL:  strings.TrimSpace(toString(row["image_url"])),
+		Chat:      strings.TrimSpace(toString(row["chat"])),
+		UserName:  strings.TrimSpace(toString(row["username"])),
+		IsGroup:   toInt64(row["is_group"]) == 1 || strings.EqualFold(strings.TrimSpace(toString(row["is_group"])), "true"),
+		ChatType:  strings.TrimSpace(toString(row["chat_type"])),
+	}
+}
+
+func toHistoryMessageOutList(rows []gin.H) []historyMessageOut {
+	out := make([]historyMessageOut, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toHistoryMessageOut(row))
+	}
+	return out
+}
+
 func toHistoryMessage(m *model.Message, host string) gin.H {
+	if strings.TrimSpace(host) != "" {
+		m.SetContent("host", host)
+	}
 	content := m.Content
 	if content == "" {
 		content = m.PlainTextContent()
@@ -680,17 +1559,21 @@ func toHistoryMessage(m *model.Message, host string) gin.H {
 func (s *Service) handleChatlog(c *gin.Context) {
 
 	q := struct {
-		Time    string `form:"time"`
-		Since   string `form:"since"`
-		Until   string `form:"until"`
-		Chat    string `form:"chat"`
-		Talker  string `form:"talker"`
-		Sender  string `form:"sender"`
-		Keyword string `form:"keyword"`
-		MsgType int64  `form:"msg_type"`
-		Limit   int    `form:"limit"`
-		Offset  int    `form:"offset"`
-		Format  string `form:"format"`
+		Time     string `form:"time"`
+		Since    string `form:"since"`
+		Until    string `form:"until"`
+		Chat     string `form:"chat"`
+		Talker   string `form:"talker"`
+		Sender   string `form:"sender"`
+		Keyword  string `form:"keyword"`
+		MsgType  int64  `form:"msg_type"`
+		SubType  int64  `form:"sub_type"`
+		Hour     string `form:"hour"`
+		IsSelf   string `form:"is_self"`
+		HasMedia string `form:"has_media"`
+		Limit    int    `form:"limit"`
+		Offset   int    `form:"offset"`
+		Format   string `form:"format"`
 	}{}
 
 	if err := c.BindQuery(&q); err != nil {
@@ -718,17 +1601,43 @@ func (s *Service) handleChatlog(c *gin.Context) {
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
+	hour, err := parseOptionalHour(q.Hour)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	isSelfFilter, err := parseOptionalBool(q.IsSelf)
+	if err != nil {
+		errors.Err(c, errors.InvalidArg("is_self"))
+		return
+	}
+	hasMediaFilter, err := parseOptionalBool(q.HasMedia)
+	if err != nil {
+		errors.Err(c, errors.InvalidArg("has_media"))
+		return
+	}
 
 	keyword := q.Keyword
 	if strings.TrimSpace(keyword) != "" {
 		keyword = regexp.QuoteMeta(keyword)
 	}
-	messages, err := s.db.GetMessages(start, end, talker, q.Sender, keyword, q.Limit, q.Offset)
+	needPostFilter := q.MsgType != 0 || q.SubType != 0 || hour >= 0 || isSelfFilter != nil || hasMediaFilter != nil
+	fetchLimit := q.Limit
+	fetchOffset := q.Offset
+	if needPostFilter {
+		// Ensure filters are applied on full result set, then paginate locally.
+		fetchLimit = 0
+		fetchOffset = 0
+	}
+	messages, err := s.db.GetMessages(start, end, talker, q.Sender, keyword, fetchLimit, fetchOffset)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
-	messages = filterByMsgType(messages, q.MsgType)
+	messages = filterHistoryMessages(messages, q.MsgType, q.SubType, hour, isSelfFilter, hasMediaFilter)
+	if needPostFilter {
+		messages = paginateMessages(messages, q.Limit, q.Offset)
+	}
 
 	// Populate md5->path cache for media files
 	s.populateMD5PathCache(messages)
@@ -865,14 +1774,18 @@ func (s *Service) handleSessionsCompat(c *gin.Context) {
 
 func (s *Service) handleHistory(c *gin.Context) {
 	q := struct {
-		Chat    string `form:"chat"`
-		Time    string `form:"time"`
-		Since   string `form:"since"`
-		Until   string `form:"until"`
-		MsgType int64  `form:"msg_type"`
-		Limit   int    `form:"limit"`
-		Offset  int    `form:"offset"`
-		Format  string `form:"format"`
+		Chat     string `form:"chat"`
+		Time     string `form:"time"`
+		Since    string `form:"since"`
+		Until    string `form:"until"`
+		MsgType  int64  `form:"msg_type"`
+		SubType  int64  `form:"sub_type"`
+		Hour     string `form:"hour"`
+		IsSelf   string `form:"is_self"`
+		HasMedia string `form:"has_media"`
+		Limit    int    `form:"limit"`
+		Offset   int    `form:"offset"`
+		Format   string `form:"format"`
 	}{}
 	if err := c.BindQuery(&q); err != nil {
 		errors.Err(c, err)
@@ -888,26 +1801,44 @@ func (s *Service) handleHistory(c *gin.Context) {
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
+	hour, err := parseOptionalHour(q.Hour)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	isSelfFilter, err := parseOptionalBool(q.IsSelf)
+	if err != nil {
+		errors.Err(c, errors.InvalidArg("is_self"))
+		return
+	}
+	hasMediaFilter, err := parseOptionalBool(q.HasMedia)
+	if err != nil {
+		errors.Err(c, errors.InvalidArg("has_media"))
+		return
+	}
 	start, end, _, err := parseSinceUntil(q.Time, q.Since, q.Until)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
-	messages, err := s.db.GetMessages(start, end, q.Chat, "", "", q.Limit+q.Offset, 0)
+	needPostFilter := q.MsgType != 0 || q.SubType != 0 || hour >= 0 || isSelfFilter != nil || hasMediaFilter != nil
+	fetchLimit := q.Limit + q.Offset
+	if needPostFilter {
+		// Ensure filters are applied on full result set, then paginate locally.
+		fetchLimit = 0
+	}
+	messages, err := s.db.GetMessages(start, end, q.Chat, "", "", fetchLimit, 0)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
-	messages = filterByMsgType(messages, q.MsgType)
-	if q.Offset > 0 {
-		if q.Offset >= len(messages) {
-			messages = []*model.Message{}
-		} else {
-			messages = messages[q.Offset:]
-		}
-	}
-	if q.Limit > 0 && len(messages) > q.Limit {
-		messages = messages[:q.Limit]
+	messages = filterHistoryMessages(messages, q.MsgType, q.SubType, hour, isSelfFilter, hasMediaFilter)
+	totalCount := len(messages)
+	if needPostFilter {
+		messages = paginateMessages(messages, q.Limit, q.Offset)
+	} else {
+		// Keep previous behavior when no post-filter is used.
+		messages = paginateMessages(messages, q.Limit, q.Offset)
 	}
 	chat := q.Chat
 	username := q.Chat
@@ -930,13 +1861,16 @@ func (s *Service) handleHistory(c *gin.Context) {
 	for _, m := range messages {
 		rows = append(rows, toHistoryMessage(m, c.Request.Host))
 	}
-	writeByFormat(c, gin.H{
-		"chat":      chat,
-		"username":  username,
-		"is_group":  isGroup,
-		"chat_type": chatType,
-		"count":     len(rows),
-		"messages":  rows,
+	writeByFormat(c, historyResponse{
+		Chat:       chat,
+		UserName:   username,
+		IsGroup:    isGroup,
+		ChatType:   chatType,
+		TotalCount: totalCount,
+		Count:      len(rows),
+		Limit:      q.Limit,
+		Offset:     q.Offset,
+		Messages:   toHistoryMessageOutList(rows),
 	}, q.Format)
 }
 
@@ -949,6 +1883,7 @@ func (s *Service) handleSearchCompat(c *gin.Context) {
 		Until   string `form:"until"`
 		MsgType int64  `form:"msg_type"`
 		Limit   int    `form:"limit"`
+		Offset  int    `form:"offset"`
 		Format  string `form:"format"`
 	}{}
 	if err := c.BindQuery(&q); err != nil {
@@ -961,6 +1896,9 @@ func (s *Service) handleSearchCompat(c *gin.Context) {
 	}
 	if q.Limit <= 0 {
 		q.Limit = 20
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
 	}
 	start, end, _, err := parseSinceUntil(q.Time, q.Since, q.Until)
 	if err != nil {
@@ -978,10 +1916,23 @@ func (s *Service) handleSearchCompat(c *gin.Context) {
 		}
 	}
 
-	out := make([]gin.H, 0, q.Limit*2)
+	target := q.Limit + q.Offset
+	if target <= 0 {
+		target = q.Limit
+	}
+	out := make([]gin.H, 0, target*2)
 	kwPattern := regexp.QuoteMeta(q.Keyword)
 	for _, chat := range chats {
-		msgs, err := s.db.GetMessages(start, end, chat, "", kwPattern, q.Limit*3, 0)
+		fetchLimit := target * 3
+		if fetchLimit < 60 {
+			fetchLimit = 60
+		}
+		if q.MsgType != 0 {
+			// Keep search semantics aligned with history/stats:
+			// when type filter is applied, avoid pre-truncation before filtering.
+			fetchLimit = 0
+		}
+		msgs, err := s.db.GetMessages(start, end, chat, "", kwPattern, fetchLimit, 0)
 		if err != nil {
 			continue
 		}
@@ -994,15 +1945,25 @@ func (s *Service) handleSearchCompat(c *gin.Context) {
 			}
 			row["username"] = m.Talker
 			out = append(out, row)
-			if len(out) >= q.Limit {
-				break
-			}
-		}
-		if len(out) >= q.Limit {
-			break
 		}
 	}
-	writeByFormat(c, gin.H{"count": len(out), "messages": out}, q.Format)
+	sort.Slice(out, func(i, j int) bool {
+		ti := toInt64(out[i]["timestamp"])
+		tj := toInt64(out[j]["timestamp"])
+		if ti == tj {
+			return toInt64(out[i]["local_id"]) > toInt64(out[j]["local_id"])
+		}
+		return ti > tj
+	})
+	totalCount := len(out)
+	out = paginateRows(out, q.Limit, q.Offset)
+	writeByFormat(c, searchResponse{
+		TotalCount: totalCount,
+		Count:      len(out),
+		Limit:      q.Limit,
+		Offset:     q.Offset,
+		Messages:   toHistoryMessageOutList(out),
+	}, q.Format)
 }
 
 func classifyChatType(username string) string {
@@ -1239,6 +2200,7 @@ func (s *Service) handleNewMessagesCompat(c *gin.Context) {
 func (s *Service) handleStatsCompat(c *gin.Context) {
 	chat := strings.TrimSpace(c.Query("chat"))
 	format := c.Query("format")
+	rawTime := strings.TrimSpace(c.Query("time"))
 	if chat == "" {
 		errors.Err(c, errors.InvalidArg("chat"))
 		return
@@ -1248,6 +2210,14 @@ func (s *Service) handleStatsCompat(c *gin.Context) {
 		errors.Err(c, err)
 		return
 	}
+	sinceUnix := int64(0)
+	untilUnix := int64(0)
+	if !start.IsZero() {
+		sinceUnix = start.Unix()
+	}
+	if !end.IsZero() {
+		untilUnix = end.Unix()
+	}
 	msgs, err := s.db.GetMessages(start, end, chat, "", "", 0, 0)
 	if err != nil {
 		errors.Err(c, err)
@@ -1255,6 +2225,7 @@ func (s *Service) handleStatsCompat(c *gin.Context) {
 	}
 	byType := map[string]int64{}
 	topSenders := map[string]int64{}
+	activeSenders := map[string]struct{}{}
 	sentCount := 0
 	receivedCount := 0
 	activeDaysSet := map[string]struct{}{}
@@ -1286,20 +2257,23 @@ func (s *Service) handleStatsCompat(c *gin.Context) {
 				sender = m.Sender
 			}
 			topSenders[sender]++
+			if strings.TrimSpace(sender) != "" {
+				activeSenders[sender] = struct{}{}
+			}
 		}
 		h := m.Time.Hour()
 		byHour[h]["count"] = byHour[h]["count"].(int) + 1
 	}
-	typeRows := make([]gin.H, 0, len(byType))
+	typeRows := make([]statsCountByType, 0, len(byType))
 	for t, n := range byType {
-		typeRows = append(typeRows, gin.H{"type": t, "count": n})
+		typeRows = append(typeRows, statsCountByType{Type: t, Count: n})
 	}
-	sort.Slice(typeRows, func(i, j int) bool { return toInt64(typeRows[i]["count"]) > toInt64(typeRows[j]["count"]) })
-	senderRows := make([]gin.H, 0, len(topSenders))
+	sort.Slice(typeRows, func(i, j int) bool { return typeRows[i].Count > typeRows[j].Count })
+	senderRows := make([]statsCountBySender, 0, len(topSenders))
 	for sdr, n := range topSenders {
-		senderRows = append(senderRows, gin.H{"sender": sdr, "count": n})
+		senderRows = append(senderRows, statsCountBySender{Sender: sdr, Count: n})
 	}
-	sort.Slice(senderRows, func(i, j int) bool { return toInt64(senderRows[i]["count"]) > toInt64(senderRows[j]["count"]) })
+	sort.Slice(senderRows, func(i, j int) bool { return senderRows[i].Count > senderRows[j].Count })
 	if len(senderRows) > 10 {
 		senderRows = senderRows[:10]
 	}
@@ -1326,21 +2300,44 @@ func (s *Service) handleStatsCompat(c *gin.Context) {
 			display = msgs[0].TalkerName
 		}
 	}
-	writeByFormat(c, gin.H{
-		"chat":               display,
-		"username":           username,
-		"is_group":           chatType == "group",
-		"chat_type":          chatType,
-		"total":              len(msgs),
-		"sent_count":         sentCount,
-		"received_count":     receivedCount,
-		"active_days":        len(activeDaysSet),
-		"first_message_time": firstMessageTime,
-		"last_message_time":  lastMessageTime,
-		"by_type":            typeRows,
-		"top_senders":        senderRows,
-		"by_hour":            byHour,
-	}, format)
+	queryRangeLabel := "全部时间"
+	if !strings.EqualFold(rawTime, "all") {
+		switch {
+		case sinceUnix > 0 && untilUnix > 0:
+			queryRangeLabel = fmt.Sprintf("%s - %s", time.Unix(sinceUnix, 0).Format("2006-01-02 15:04"), time.Unix(untilUnix, 0).Format("2006-01-02 15:04"))
+		case sinceUnix > 0:
+			queryRangeLabel = fmt.Sprintf("自 %s 起", time.Unix(sinceUnix, 0).Format("2006-01-02 15:04"))
+		case untilUnix > 0:
+			queryRangeLabel = fmt.Sprintf("截至 %s", time.Unix(untilUnix, 0).Format("2006-01-02 15:04"))
+		}
+	}
+	hourRows := make([]statsCountByHour, 0, len(byHour))
+	for _, item := range byHour {
+		hourRows = append(hourRows, statsCountByHour{
+			Hour:  int(toInt64(item["hour"])),
+			Count: int(toInt64(item["count"])),
+		})
+	}
+	payload := statsResponse{
+		Chat:             display,
+		UserName:         username,
+		IsGroup:          chatType == "group",
+		ChatType:         chatType,
+		Total:            len(msgs),
+		SentCount:        sentCount,
+		ReceivedCount:    receivedCount,
+		ActiveSenders:    len(activeSenders),
+		ActiveDays:       len(activeDaysSet),
+		FirstMessageTime: firstMessageTime,
+		LastMessageTime:  lastMessageTime,
+		QuerySince:       sinceUnix,
+		QueryUntil:       untilUnix,
+		QueryRangeLabel:  queryRangeLabel,
+		ByType:           typeRows,
+		TopSenders:       senderRows,
+		ByHour:           hourRows,
+	}
+	writeByFormat(c, payload, format)
 }
 
 func (s *Service) handleFavoritesCompat(c *gin.Context) {
@@ -1639,28 +2636,42 @@ func (s *Service) handleSNSSearchCompat(c *gin.Context) {
 
 func (s *Service) handleContactsCompat(c *gin.Context) {
 	q := struct {
-		Query  string `form:"query"`
-		Limit  int    `form:"limit"`
-		Offset int    `form:"offset"`
-		Format string `form:"format"`
+		Query    string `form:"query"`
+		Limit    int    `form:"limit"`
+		Offset   int    `form:"offset"`
+		IsFriend string `form:"is_friend"`
+		Format   string `form:"format"`
 	}{}
 	if err := c.BindQuery(&q); err != nil {
 		errors.Err(c, err)
 		return
 	}
 	if q.Limit <= 0 {
-		q.Limit = 50
+		q.Limit = 500
 	}
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
-	list, err := s.db.GetContacts(q.Query, q.Limit, q.Offset)
+	isFriendFilter, err := parseOptionalBool(q.IsFriend)
+	if err != nil {
+		errors.Err(c, errors.InvalidArg("is_friend"))
+		return
+	}
+	fetchLimit, fetchOffset := q.Limit, q.Offset
+	if isFriendFilter != nil {
+		// Apply friend filter before pagination.
+		fetchLimit, fetchOffset = 0, 0
+	}
+	list, err := s.db.GetContacts(q.Query, fetchLimit, fetchOffset)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
 	out := make([]gin.H, 0, len(list.Items))
 	for _, ct := range list.Items {
+		if isFriendFilter != nil && ct.IsFriend != *isFriendFilter {
+			continue
+		}
 		display := ct.DisplayName()
 		if display == "" {
 			display = ct.UserName
@@ -1673,6 +2684,9 @@ func (s *Service) handleContactsCompat(c *gin.Context) {
 			"display":   display,
 			"is_friend": ct.IsFriend,
 		})
+	}
+	if isFriendFilter != nil {
+		out = paginateRows(out, q.Limit, q.Offset)
 	}
 	writeByFormat(c, gin.H{"count": len(out), "contacts": out}, q.Format)
 }
@@ -1689,7 +2703,7 @@ func (s *Service) handleChatRoomsCompat(c *gin.Context) {
 		return
 	}
 	if q.Limit <= 0 {
-		q.Limit = 50
+		q.Limit = 500
 	}
 	if q.Offset < 0 {
 		q.Offset = 0
@@ -1734,6 +2748,10 @@ func (s *Service) handleMedia(c *gin.Context, _type string) {
 	for _, k := range keys {
 		if strings.Contains(k, "/") {
 			if absolutePath, err := s.findPath(_type, k); err == nil {
+				if _type == "image" {
+					s.handleImageFile(c, filepath.Join(s.conf.GetDataDir(), absolutePath))
+					return
+				}
 				c.Redirect(http.StatusFound, "/data/"+absolutePath)
 				return
 			}

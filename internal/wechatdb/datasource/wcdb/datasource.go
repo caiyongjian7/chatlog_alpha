@@ -132,12 +132,12 @@ func (ds *DataSource) GetMessages(ctx context.Context, startTime, endTime time.T
 	perTalkerLimit := 0
 	if limit > 0 {
 		perTalkerLimit = (limit + offset) * 5
-	}
-	if perTalkerLimit < 1000 {
-		perTalkerLimit = 1000
-	}
-	if perTalkerLimit > 50000 {
-		perTalkerLimit = 50000
+		if perTalkerLimit < 1000 {
+			perTalkerLimit = 1000
+		}
+		if perTalkerLimit > 50000 {
+			perTalkerLimit = 50000
+		}
 	}
 
 	out := make([]*model.Message, 0, perTalkerLimit*len(talkers))

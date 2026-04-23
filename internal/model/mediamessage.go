@@ -264,17 +264,33 @@ func (r *RecordInfo) String(_type, title, host string) string {
 		switch item.DataType {
 		case "2":
 			// 图片
-			buf.WriteString(fmt.Sprintf("  ![图片](http://%s/image/%s)\n", host, item.FullMD5))
+			if strings.TrimSpace(host) == "" || strings.TrimSpace(item.FullMD5) == "" {
+				buf.WriteString("  [图片]\n")
+			} else {
+				buf.WriteString(fmt.Sprintf("  ![图片](http://%s/image/%s)\n", host, item.FullMD5))
+			}
 		case "4":
 			//视频
-			buf.WriteString(fmt.Sprintf("  ![视频](http://%s/video/%s)\n", host, item.FullMD5))
+			if strings.TrimSpace(host) == "" || strings.TrimSpace(item.FullMD5) == "" {
+				buf.WriteString("  [视频]\n")
+			} else {
+				buf.WriteString(fmt.Sprintf("  ![视频](http://%s/video/%s)\n", host, item.FullMD5))
+			}
 		case "8":
 			// 文件
 			// FIXME 笔记的第一条是 htm 数据，暂时跳过处理
 			if item.DataFmt == ".htm" {
 				continue
 			}
-			buf.WriteString(fmt.Sprintf("  [文件|%s](http://%s/file/%s)\n", item.DataTitle, host, item.FullMD5))
+			title := strings.TrimSpace(item.DataTitle)
+			if title == "" {
+				title = "文件"
+			}
+			if strings.TrimSpace(host) == "" || strings.TrimSpace(item.FullMD5) == "" {
+				buf.WriteString(fmt.Sprintf("  [文件|%s]\n", title))
+			} else {
+				buf.WriteString(fmt.Sprintf("  [文件|%s](http://%s/file/%s)\n", title, host, item.FullMD5))
+			}
 		case "5":
 			// Link
 			buf.WriteString(fmt.Sprintf("  [链接|%s](%s)\n", item.DataTitle, item.Link))

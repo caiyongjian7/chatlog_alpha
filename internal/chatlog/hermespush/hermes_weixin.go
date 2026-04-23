@@ -62,7 +62,19 @@ type hermesConfigYAML struct {
 			Token string         `yaml:"token"`
 			Extra map[string]any `yaml:"extra"`
 		} `yaml:"weixin"`
+		QQBot hermesQQPlatformYAML `yaml:"qqbot"`
+		QQ    hermesQQPlatformYAML `yaml:"qq"`
 	} `yaml:"platforms"`
+}
+
+type hermesQQPlatformYAML struct {
+	Extra       map[string]any         `yaml:"extra"`
+	HomeChannel *hermesHomeChannelYAML `yaml:"home_channel"`
+}
+
+type hermesHomeChannelYAML struct {
+	ChatID string `yaml:"chat_id"`
+	Name   string `yaml:"name"`
 }
 
 type weixinAccountFile struct {

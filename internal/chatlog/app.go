@@ -519,7 +519,7 @@ func (a *App) settingSelected(i *menu.Item) {
 		},
 		{
 			name:        "设置触发通知方式",
-			description: "可选 mcp / post / both / weixin / all",
+			description: "可选 mcp / post / both / weixin / qq / all",
 			action:      a.settingHookNotifyMode,
 		},
 		{

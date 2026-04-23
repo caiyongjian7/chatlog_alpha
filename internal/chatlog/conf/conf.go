@@ -102,4 +102,5 @@ var DataDirConfigs = map[string]bool{
 	"full_version": true,
 	"data_key":     true,
 	"img_key":      true,
+	"semantic":     true,
 }
