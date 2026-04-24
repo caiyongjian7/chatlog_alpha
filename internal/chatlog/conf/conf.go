@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/sjzar/chatlog/pkg/config"
@@ -38,8 +39,7 @@ func LoadTUIConfig(configPath string) (*TUIConfig, *config.Manager, error) {
 	}
 	conf.ConfigDir = tcm.Path
 
-	b, _ := json.Marshal(conf)
-	log.Info().Msgf("tui config: %s", string(b))
+	logConfig("tui config", conf)
 
 	return conf, tcm, nil
 }
@@ -89,10 +89,56 @@ func LoadServiceConfig(configPath string, cmdConf map[string]any) (*ServerConfig
 		}
 	}
 
-	b, _ := json.Marshal(conf)
-	log.Info().Msgf("server config: %s", string(b))
+	logConfig("server config", conf)
 
 	return conf, scm, nil
+}
+
+func logConfig(msg string, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		log.Info().Msg(msg)
+		return
+	}
+	var payload any
+	if err := json.Unmarshal(b, &payload); err != nil {
+		log.Info().Msgf("%s: %s", msg, string(b))
+		return
+	}
+	scrubConfigSecrets(payload)
+	if out, err := json.Marshal(payload); err == nil {
+		log.Info().Msgf("%s: %s", msg, string(out))
+		return
+	}
+	log.Info().Msgf("%s: %s", msg, string(b))
+}
+
+func scrubConfigSecrets(v any) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if isSensitiveConfigKey(k) {
+				if s, ok := child.(string); ok && strings.TrimSpace(s) != "" {
+					x[k] = "******"
+				}
+				continue
+			}
+			scrubConfigSecrets(child)
+		}
+	case []any:
+		for _, child := range x {
+			scrubConfigSecrets(child)
+		}
+	}
+}
+
+func isSensitiveConfigKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	switch key {
+	case "data_key", "img_key", "api_key", "client_secret", "access_token", "refresh_token", "password":
+		return true
+	}
+	return strings.Contains(key, "token") || strings.Contains(key, "secret")
 }
 
 var DataDirConfigs = map[string]bool{

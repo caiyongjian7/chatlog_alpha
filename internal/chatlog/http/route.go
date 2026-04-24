@@ -24,6 +24,7 @@ import (
 
 	"github.com/sjzar/chatlog/internal/chatlog/conf"
 	"github.com/sjzar/chatlog/internal/chatlog/hermespush"
+	"github.com/sjzar/chatlog/internal/chatlog/semantic"
 	chatwechat "github.com/sjzar/chatlog/internal/chatlog/wechat"
 	"github.com/sjzar/chatlog/internal/errors"
 	"github.com/sjzar/chatlog/internal/model"
@@ -70,6 +71,7 @@ func (s *Service) initBaseRouter() {
 	s.router.POST("/api/v1/semantic/config", s.handleSemanticConfigSet)
 	s.router.POST("/api/v1/semantic/test", s.handleSemanticTest)
 	s.router.GET("/api/v1/semantic/index/status", s.handleSemanticIndexStatus)
+	s.router.POST("/api/v1/semantic/qa/stream", s.handleSemanticQAStream)
 
 	s.router.NoRoute(s.NoRoute)
 }
@@ -215,6 +217,10 @@ type semanticConfigReq struct {
 	BaseURL             string  `json:"base_url"`
 	EmbeddingModel      string  `json:"embedding_model"`
 	RerankModel         string  `json:"rerank_model"`
+	ChatModel           string  `json:"chat_model"`
+	ChatThinking        bool    `json:"chat_thinking"`
+	ChatMaxTokens       int     `json:"chat_max_tokens"`
+	ChatTemperature     float64 `json:"chat_temperature"`
 	EmbeddingDimension  int     `json:"embedding_dimension"`
 	EnableRerank        bool    `json:"enable_rerank"`
 	EnableSemanticPush  bool    `json:"enable_semantic_push"`
@@ -241,6 +247,10 @@ func (s *Service) handleSemanticConfigGet(c *gin.Context) {
 		"base_url":             norm.BaseURL,
 		"embedding_model":      norm.EmbeddingModel,
 		"rerank_model":         norm.RerankModel,
+		"chat_model":           norm.ChatModel,
+		"chat_thinking":        norm.ChatThinking,
+		"chat_max_tokens":      norm.ChatMaxTokens,
+		"chat_temperature":     norm.ChatTemperature,
 		"embedding_dimension":  norm.EmbeddingDimension,
 		"enable_rerank":        norm.EnableRerank,
 		"enable_semantic_push": norm.EnableSemanticPush,
@@ -267,6 +277,10 @@ func (s *Service) handleSemanticConfigSet(c *gin.Context) {
 		BaseURL:             strings.TrimSpace(req.BaseURL),
 		EmbeddingModel:      strings.TrimSpace(req.EmbeddingModel),
 		RerankModel:         strings.TrimSpace(req.RerankModel),
+		ChatModel:           strings.TrimSpace(req.ChatModel),
+		ChatThinking:        req.ChatThinking,
+		ChatMaxTokens:       req.ChatMaxTokens,
+		ChatTemperature:     req.ChatTemperature,
 		EmbeddingDimension:  req.EmbeddingDimension,
 		EnableRerank:        true,
 		EnableSemanticPush:  true,
@@ -344,13 +358,11 @@ func (s *Service) handleSemanticRebuild(c *gin.Context) {
 	}
 	reset := strings.EqualFold(strings.TrimSpace(c.Query("reset")), "1") ||
 		strings.EqualFold(strings.TrimSpace(c.Query("reset")), "true")
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Minute)
-	defer cancel()
-	if err := s.semantic.Rebuild(ctx, reset); err != nil {
-		errors.Err(c, err)
+	if err := s.semantic.StartRebuild(12*time.Hour, reset); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "status": s.semantic.Status()})
 		return
 	}
-	writeByFormat(c, gin.H{"ok": true, "status": s.semantic.Status()}, c.Query("format"))
+	writeByFormat(c, gin.H{"ok": true, "accepted": true, "status": s.semantic.Status()}, c.Query("format"))
 }
 
 func (s *Service) handleSemanticClear(c *gin.Context) {
@@ -389,33 +401,41 @@ func (s *Service) handleSemanticSearch(c *gin.Context) {
 	rerank := strings.EqualFold(strings.TrimSpace(c.DefaultQuery("rerank", "1")), "1") ||
 		strings.EqualFold(strings.TrimSpace(c.Query("rerank")), "true")
 	talker := strings.TrimSpace(c.Query("chat"))
-	hits, err := s.semantic.Search(c.Request.Context(), query, talker, limit, rerank)
+	sourceLimit, _ := strconv.Atoi(c.DefaultQuery("source_limit", "50"))
+	talkers, err := s.semanticTalkerScope(talker, c.Query("chats"), sourceLimit)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	_, _, start, end := parseSemanticWindow(c.DefaultQuery("window", "all"))
+	result, err := s.semantic.SearchWithMetaScoped(c.Request.Context(), query, talkers, start, end, limit, rerank)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
 	writeByFormat(c, gin.H{
-		"query":   query,
-		"chat":    talker,
-		"count":   len(hits),
-		"rerank":  rerank,
-		"results": hits,
+		"query":          query,
+		"chat":           talker,
+		"source_count":   len(talkers),
+		"window":         c.DefaultQuery("window", "all"),
+		"count":          len(result.Hits),
+		"rerank":         rerank,
+		"rerank_tried":   result.RerankTried,
+		"rerank_applied": result.RerankApplied,
+		"rerank_error":   result.RerankError,
+		"results":        result.Hits,
 	}, c.Query("format"))
 }
 
 func (s *Service) handleSemanticQA(c *gin.Context) {
-	if s.semantic == nil {
-		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
-		return
-	}
-	if err := s.ensureSemanticIndexReady(); err != nil {
-		errors.Err(c, err)
-		return
-	}
 	var req struct {
-		Query string `json:"query"`
-		Chat  string `json:"chat"`
-		TopN  int    `json:"top_n"`
+		Query       string                 `json:"query"`
+		Chat        string                 `json:"chat"`
+		Chats       []string               `json:"chats"`
+		Window      string                 `json:"window"`
+		SourceLimit int                    `json:"source_limit"`
+		TopN        int                    `json:"top_n"`
+		History     []semantic.ChatMessage `json:"history"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		errors.Err(c, errors.InvalidArg("body"))
@@ -429,27 +449,169 @@ func (s *Service) handleSemanticQA(c *gin.Context) {
 	if req.TopN <= 0 {
 		req.TopN = 8
 	}
-	hits, err := s.semantic.Search(c.Request.Context(), req.Query, strings.TrimSpace(req.Chat), req.TopN, true)
+	talkers, err := s.semanticTalkerScope(strings.TrimSpace(req.Chat), strings.Join(req.Chats, ","), req.SourceLimit)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
-	answer := "未找到足够证据。"
-	if len(hits) > 0 {
-		lines := make([]string, 0, len(hits))
-		for i, item := range hits {
-			ts := time.Unix(item.Time, 0).Format("2006-01-02 15:04:05")
-			lines = append(lines, fmt.Sprintf("%d. [%s][%s/%s] %s", i+1, ts, pickText(item.TalkerName, item.Talker), pickText(item.SenderName, item.Sender), singleLineText(item.Content)))
-		}
-		answer = "基于聊天记录检索到以下证据（按相关性排序）：\n" + strings.Join(lines, "\n")
+	_, _, start, end := parseSemanticWindow(req.Window)
+	direct, plan, err := s.trySemanticRoutedDirect(c.Request.Context(), req.Query, talkers, req.Window, req.TopN)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	if direct != nil {
+		direct.Debug = attachEmptyReason(direct.Debug, direct.Reason)
+		writeByFormat(c, gin.H{
+			"query":          req.Query,
+			"chat":           req.Chat,
+			"source_count":   len(talkers),
+			"window":         direct.Window,
+			"count":          direct.Count,
+			"answer":         direct.Answer,
+			"evidence":       direct.Evidence,
+			"direct":         true,
+			"debug":          direct.Debug,
+			"reason":         direct.Reason,
+			"rerank_tried":   false,
+			"rerank_applied": false,
+			"rerank_error":   "",
+		}, c.Query("format"))
+		return
+	}
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	if err := s.ensureSemanticIndexReady(); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	vectorQuery := semanticVectorQuery(req.Query, plan)
+	answer, hits, searchMeta, err := s.semantic.AnswerScoped(c.Request.Context(), vectorQuery, talkers, start, end, req.TopN, req.History)
+	if err != nil {
+		errors.Err(c, err)
+		return
 	}
 	writeByFormat(c, gin.H{
-		"query":    req.Query,
-		"chat":     req.Chat,
-		"count":    len(hits),
-		"answer":   answer,
-		"evidence": hits,
+		"query":          req.Query,
+		"chat":           req.Chat,
+		"source_count":   len(talkers),
+		"window":         defaultString(req.Window, "all"),
+		"count":          len(hits),
+		"answer":         answer,
+		"evidence":       hits,
+		"debug":          semanticPlanDebug(plan, talkers, "vector/rag"),
+		"rerank_tried":   searchMeta.RerankTried,
+		"rerank_applied": searchMeta.RerankApplied,
+		"rerank_error":   searchMeta.RerankError,
 	}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticQAStream(c *gin.Context) {
+	var req struct {
+		Query       string                 `json:"query"`
+		Chat        string                 `json:"chat"`
+		Chats       []string               `json:"chats"`
+		Window      string                 `json:"window"`
+		SourceLimit int                    `json:"source_limit"`
+		TopN        int                    `json:"top_n"`
+		History     []semantic.ChatMessage `json:"history"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errors.Err(c, errors.InvalidArg("body"))
+		return
+	}
+	req.Query = strings.TrimSpace(req.Query)
+	if req.Query == "" {
+		errors.Err(c, errors.InvalidArg("query"))
+		return
+	}
+	if req.TopN <= 0 {
+		req.TopN = 8
+	}
+	talkers, err := s.semanticTalkerScope(strings.TrimSpace(req.Chat), strings.Join(req.Chats, ","), req.SourceLimit)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	_, _, start, end := parseSemanticWindow(req.Window)
+
+	w := c.Writer
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	writeEvent := func(event string, payload any) error {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, raw); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+	direct, plan, err := s.trySemanticRoutedDirect(c.Request.Context(), req.Query, talkers, req.Window, req.TopN)
+	if err != nil {
+		_ = writeEvent("error", gin.H{"error": err.Error()})
+		return
+	}
+	if direct != nil {
+		direct.Debug = attachEmptyReason(direct.Debug, direct.Reason)
+		_ = writeEvent("delta", gin.H{"text": direct.Answer})
+		_ = writeEvent("done", gin.H{
+			"query":          req.Query,
+			"chat":           req.Chat,
+			"source_count":   len(talkers),
+			"window":         direct.Window,
+			"count":          direct.Count,
+			"answer":         direct.Answer,
+			"evidence":       direct.Evidence,
+			"direct":         true,
+			"debug":          direct.Debug,
+			"reason":         direct.Reason,
+			"rerank_tried":   false,
+			"rerank_applied": false,
+			"rerank_error":   "",
+		})
+		return
+	}
+	if s.semantic == nil {
+		_ = writeEvent("error", gin.H{"error": "semantic manager unavailable"})
+		return
+	}
+	if err := s.ensureSemanticIndexReady(); err != nil {
+		_ = writeEvent("error", gin.H{"error": err.Error()})
+		return
+	}
+	var full strings.Builder
+	vectorQuery := semanticVectorQuery(req.Query, plan)
+	hits, searchMeta, err := s.semantic.AnswerStreamScoped(c.Request.Context(), vectorQuery, talkers, start, end, req.TopN, req.History, func(delta string) error {
+		full.WriteString(delta)
+		return writeEvent("delta", gin.H{"text": delta})
+	})
+	if err != nil {
+		_ = writeEvent("error", gin.H{"error": err.Error()})
+		return
+	}
+	_ = writeEvent("done", gin.H{
+		"query":          req.Query,
+		"chat":           req.Chat,
+		"source_count":   len(talkers),
+		"window":         defaultString(req.Window, "all"),
+		"count":          len(hits),
+		"answer":         full.String(),
+		"evidence":       hits,
+		"debug":          semanticPlanDebug(plan, talkers, "vector/rag"),
+		"rerank_tried":   searchMeta.RerankTried,
+		"rerank_applied": searchMeta.RerankApplied,
+		"rerank_error":   searchMeta.RerankError,
+	})
 }
 
 func (s *Service) handleSemanticTopics(c *gin.Context) {
@@ -466,16 +628,25 @@ func (s *Service) handleSemanticTopics(c *gin.Context) {
 	}
 	topics := summarizeTopics(msgs, 50)
 	daily := summarizeDailyMessages(msgs, start, end)
+	summary, summaryErr := s.summarizeSemantic(c.Request.Context(), "主题趋势分析", gin.H{
+		"window": windowLabel,
+		"chat":   chat,
+		"count":  len(msgs),
+		"topics": topics,
+		"daily":  daily,
+	})
 	writeByFormat(c, gin.H{
-		"chat":         chat,
-		"window":       windowKey,
-		"window_label": windowLabel,
-		"from":         formatWindowTime(start),
-		"to":           formatWindowTime(end),
-		"count":        len(msgs),
-		"truncated":    truncated,
-		"topics":       topics,
-		"daily":        daily,
+		"chat":          chat,
+		"window":        windowKey,
+		"window_label":  windowLabel,
+		"from":          formatWindowTime(start),
+		"to":            formatWindowTime(end),
+		"count":         len(msgs),
+		"truncated":     truncated,
+		"topics":        topics,
+		"daily":         daily,
+		"summary":       summary,
+		"summary_error": errorString(summaryErr),
 	}, c.Query("format"))
 }
 
@@ -512,7 +683,7 @@ func (s *Service) handleSemanticProfiles(c *gin.Context) {
 		if n := strings.TrimSpace(m.SenderName); n != "" {
 			names[sender] = n
 		}
-		if txt := strings.TrimSpace(m.PlainTextContent()); txt != "" {
+		if txt := semantic.NormalizeMessageText(m); txt != "" {
 			texts[sender] = append(texts[sender], txt)
 		}
 	}
@@ -543,6 +714,13 @@ func (s *Service) handleSemanticProfiles(c *gin.Context) {
 		return toInt64(typeRows[i]["count"]) > toInt64(typeRows[j]["count"])
 	})
 	sort.Slice(list, func(i, j int) bool { return list[i].Messages > list[j].Messages })
+	summary, summaryErr := s.summarizeSemantic(c.Request.Context(), "联系人画像分析", gin.H{
+		"window":            windowLabel,
+		"chat":              chat,
+		"count":             len(msgs),
+		"profiles":          firstN(list, 40),
+		"type_distribution": typeRows,
+	})
 	writeByFormat(c, gin.H{
 		"chat":              chat,
 		"window":            windowKey,
@@ -553,6 +731,8 @@ func (s *Service) handleSemanticProfiles(c *gin.Context) {
 		"truncated":         truncated,
 		"profiles":          list,
 		"type_distribution": typeRows,
+		"summary":           summary,
+		"summary_error":     errorString(summaryErr),
 	}, c.Query("format"))
 }
 
@@ -609,6 +789,997 @@ func parseStartEndTime(c *gin.Context) (time.Time, time.Time) {
 	return start, end
 }
 
+func (s *Service) semanticTalkerScope(chat, chats string, limit int) ([]string, error) {
+	if strings.TrimSpace(chat) != "" {
+		return []string{strings.TrimSpace(chat)}, nil
+	}
+	out := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, item := range util.Str2List(chats, ",") {
+		talker := strings.TrimSpace(item)
+		if talker == "" {
+			continue
+		}
+		if _, ok := seen[talker]; ok {
+			continue
+		}
+		seen[talker] = struct{}{}
+		out = append(out, talker)
+	}
+	if len(out) > 0 {
+		return out, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	sessions, err := s.db.GetSessions("", limit, 0)
+	if err != nil {
+		return nil, err
+	}
+	if sessions == nil {
+		return nil, nil
+	}
+	for _, sess := range sessions.Items {
+		if sess == nil {
+			continue
+		}
+		talker := strings.TrimSpace(sess.UserName)
+		if talker == "" {
+			continue
+		}
+		if _, ok := seen[talker]; ok {
+			continue
+		}
+		seen[talker] = struct{}{}
+		out = append(out, talker)
+	}
+	return out, nil
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
+}
+
+type semanticDirectMessageResult struct {
+	Window   string
+	Count    int
+	Answer   string
+	Evidence []gin.H
+	Debug    gin.H
+	Reason   string
+}
+
+type semanticEntityCandidate struct {
+	Username string `json:"username"`
+	Display  string `json:"display"`
+	Kind     string `json:"kind"`
+	Source   string `json:"source"`
+}
+
+type semanticEntityResolution struct {
+	Query      string                    `json:"query"`
+	Candidates []semanticEntityCandidate `json:"candidates"`
+	Ambiguous  bool                      `json:"ambiguous"`
+}
+
+type semanticQueryPlan struct {
+	Intent      string  `json:"intent"`
+	Entity      string  `json:"entity"`
+	Topic       string  `json:"topic"`
+	Window      string  `json:"window"`
+	Chat        string  `json:"chat"`
+	MsgType     string  `json:"msg_type"`
+	AnswerMode  string  `json:"answer_mode"`
+	NeedsVector bool    `json:"needs_vector"`
+	Confidence  float64 `json:"confidence"`
+	Reason      string  `json:"reason"`
+	Source      string  `json:"source"`
+}
+
+func (s *Service) planSemanticQuery(ctx context.Context, query, fallbackWindow string, talkers []string) semanticQueryPlan {
+	rule := ruleSemanticPlan(query, fallbackWindow)
+	if s.semantic == nil {
+		return rule
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	prompt := semanticPlanPrompt(query, fallbackWindow, len(talkers), "")
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		raw, err := s.semantic.PlanJSON(ctx, prompt)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		plan, err := parseSemanticPlanJSON(raw)
+		if err != nil {
+			lastErr = err
+			prompt = semanticPlanPrompt(query, fallbackWindow, len(talkers), "上次输出不是合法 JSON 或字段不完整，请严格按 schema 只输出 JSON。")
+			continue
+		}
+		plan = normalizeSemanticPlan(plan, fallbackWindow)
+		if err := validateSemanticPlan(plan); err != nil || strings.TrimSpace(plan.Intent) == "" || plan.Confidence < 0.35 {
+			lastErr = err
+			prompt = semanticPlanPrompt(query, fallbackWindow, len(talkers), fmt.Sprintf("上次路由无效: %v。请重新输出合法 JSON。", err))
+			continue
+		}
+		plan.Source = "llm"
+		if rule.Intent != "" && rule.Intent != "semantic_search" && rule.Confidence >= 0.9 && plan.Confidence < 0.75 {
+			return rule
+		}
+		return plan
+	}
+	rule.Reason = strings.TrimSpace(rule.Reason + "；LLM 路由失败，使用规则兜底: " + errorString(lastErr))
+	return rule
+}
+
+func semanticPlanPrompt(query, fallbackWindow string, sourceCount int, retryHint string) string {
+	return fmt.Sprintf(`请把用户问题路由为一个严格 JSON 对象。
+可选 intent: sender_messages, sender_semantic_search, chat_summary, stats, keyword_search, semantic_search, media_filter, unknown。
+字段:
+- intent: 上述之一
+- entity: 联系人/群成员/群名，无法确定则空
+- topic: 语义主题或关键词，精确列消息可空
+- window: today/yesterday/7d/30d/all，无法判断用 %q
+- chat: 明确群/会话名，无法确定则空
+- msg_type: image/file/voice/video/sticker/text，非媒体可空
+- answer_mode: list/summary/stats，无法判断用 summary
+- needs_vector: 是否需要语义向量检索
+- confidence: 0-1
+- reason: 简短中文理由
+规则:
+- “某人今天发的消息/说了什么” => sender_messages
+- “某人有没有提到某事/说过某事” => sender_semantic_search
+- “某群最近聊什么/总结某群” => chat_summary
+- “多少条/统计/活跃” => stats
+- “包含/查找/搜索关键词” => keyword_search
+- “图片/文件/语音/视频/表情” => media_filter
+- 模糊语义问题 => semantic_search
+禁止输出 Markdown、代码块、解释文字。
+只输出 JSON。
+%s
+当前数据源会话数: %d
+用户问题: %s`, fallbackWindow, retryHint, sourceCount, query)
+}
+
+func ruleSemanticPlan(query, fallbackWindow string) semanticQueryPlan {
+	entity, _, _, _, ok := parseDirectSenderMessageQuery(query, fallbackWindow)
+	if ok {
+		_, windowKey := stripDirectTimeWord(strings.TrimSpace(strings.Split(query, "发")[0]))
+		if windowKey == "" {
+			windowKey = fallbackWindow
+		}
+		return normalizeSemanticPlan(semanticQueryPlan{
+			Intent:      "sender_messages",
+			Entity:      entity,
+			Window:      windowKey,
+			NeedsVector: false,
+			Confidence:  0.95,
+			Reason:      "规则命中发言人消息查询",
+			Source:      "rule",
+		}, fallbackWindow)
+	}
+	raw := strings.TrimSpace(query)
+	if mediaType, ok := detectMediaIntent(raw); ok {
+		_, windowKey := stripDirectTimeWord(raw)
+		return normalizeSemanticPlan(semanticQueryPlan{
+			Intent:      "media_filter",
+			MsgType:     mediaType,
+			Window:      defaultString(windowKey, fallbackWindow),
+			NeedsVector: false,
+			Confidence:  0.78,
+			Reason:      "规则命中媒体消息查询",
+			Source:      "rule",
+		}, fallbackWindow)
+	}
+	if strings.Contains(raw, "有没有提到") || strings.Contains(raw, "是否提到") || strings.Contains(raw, "说过") {
+		for _, marker := range []string{"有没有提到", "是否提到", "说过"} {
+			if idx := strings.Index(raw, marker); idx > 0 {
+				entity, windowKey := stripDirectTimeWord(strings.TrimSpace(raw[:idx]))
+				topic := strings.Trim(strings.TrimSpace(raw[idx+len(marker):]), " ？?。.!！")
+				return normalizeSemanticPlan(semanticQueryPlan{
+					Intent:      "sender_semantic_search",
+					Entity:      entity,
+					Topic:       topic,
+					Window:      defaultString(windowKey, fallbackWindow),
+					NeedsVector: true,
+					Confidence:  0.82,
+					Reason:      "规则命中发言人语义查询",
+					Source:      "rule",
+				}, fallbackWindow)
+			}
+		}
+	}
+	return normalizeSemanticPlan(semanticQueryPlan{
+		Intent:      "semantic_search",
+		Topic:       query,
+		Window:      fallbackWindow,
+		NeedsVector: true,
+		Confidence:  0.5,
+		Reason:      "默认语义检索",
+		Source:      "rule",
+	}, fallbackWindow)
+}
+
+func detectMediaIntent(raw string) (string, bool) {
+	if !(strings.Contains(raw, "哪些") || strings.Contains(raw, "发了") || strings.Contains(raw, "发的") || strings.Contains(raw, "消息") || strings.Contains(raw, "查找")) {
+		return "", false
+	}
+	for _, item := range []struct {
+		Word string
+		Type string
+	}{
+		{"图片", "image"},
+		{"照片", "image"},
+		{"文件", "file"},
+		{"语音", "voice"},
+		{"视频", "video"},
+		{"表情", "sticker"},
+	} {
+		if strings.Contains(raw, item.Word) {
+			return item.Type, true
+		}
+	}
+	return "", false
+}
+
+func parseSemanticPlanJSON(raw string) (semanticQueryPlan, error) {
+	raw = strings.TrimSpace(raw)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start >= 0 && end > start {
+		raw = raw[start : end+1]
+	}
+	var plan semanticQueryPlan
+	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
+		return plan, err
+	}
+	return plan, nil
+}
+
+func normalizeSemanticPlan(plan semanticQueryPlan, fallbackWindow string) semanticQueryPlan {
+	plan.Intent = strings.TrimSpace(strings.ToLower(plan.Intent))
+	plan.Entity = strings.TrimSpace(plan.Entity)
+	plan.Topic = strings.TrimSpace(plan.Topic)
+	plan.Window = strings.TrimSpace(strings.ToLower(plan.Window))
+	plan.Chat = strings.TrimSpace(plan.Chat)
+	plan.MsgType = strings.TrimSpace(strings.ToLower(plan.MsgType))
+	plan.AnswerMode = strings.TrimSpace(strings.ToLower(plan.AnswerMode))
+	if plan.Window == "" {
+		plan.Window = fallbackWindow
+	}
+	switch plan.Window {
+	case "今天":
+		plan.Window = "today"
+	case "昨天", "昨日":
+		plan.Window = "yesterday"
+	case "近七天", "最近七天", "week":
+		plan.Window = "7d"
+	case "近一月", "最近一月", "month":
+		plan.Window = "30d"
+	}
+	if plan.Intent == "" {
+		plan.Intent = "semantic_search"
+	}
+	switch plan.AnswerMode {
+	case "", "answer":
+		if plan.Intent == "sender_messages" || plan.Intent == "keyword_search" || plan.Intent == "media_filter" {
+			plan.AnswerMode = "list"
+		} else if plan.Intent == "stats" {
+			plan.AnswerMode = "stats"
+		} else {
+			plan.AnswerMode = "summary"
+		}
+	case "列表":
+		plan.AnswerMode = "list"
+	case "总结", "摘要":
+		plan.AnswerMode = "summary"
+	case "统计":
+		plan.AnswerMode = "stats"
+	}
+	if plan.Confidence < 0 {
+		plan.Confidence = 0
+	}
+	if plan.Confidence > 1 {
+		plan.Confidence = 1
+	}
+	return plan
+}
+
+func validateSemanticPlan(plan semanticQueryPlan) error {
+	switch plan.Intent {
+	case "sender_messages", "sender_semantic_search", "chat_summary", "stats", "keyword_search", "semantic_search", "media_filter", "unknown":
+	default:
+		return fmt.Errorf("invalid intent %q", plan.Intent)
+	}
+	switch plan.Window {
+	case "", "today", "yesterday", "7d", "30d", "all":
+	default:
+		return fmt.Errorf("invalid window %q", plan.Window)
+	}
+	switch plan.AnswerMode {
+	case "", "list", "summary", "stats":
+	default:
+		return fmt.Errorf("invalid answer_mode %q", plan.AnswerMode)
+	}
+	if plan.Intent == "sender_messages" && strings.TrimSpace(plan.Entity) == "" {
+		return fmt.Errorf("sender_messages requires entity")
+	}
+	if plan.Intent == "sender_semantic_search" && (strings.TrimSpace(plan.Entity) == "" || strings.TrimSpace(plan.Topic) == "") {
+		return fmt.Errorf("sender_semantic_search requires entity and topic")
+	}
+	if plan.Intent == "media_filter" && strings.TrimSpace(plan.MsgType) == "" {
+		return fmt.Errorf("media_filter requires msg_type")
+	}
+	return nil
+}
+
+func (s *Service) trySemanticRoutedDirect(ctx context.Context, query string, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+	plan := s.planSemanticQuery(ctx, query, fallbackWindow, talkers)
+	switch plan.Intent {
+	case "sender_messages":
+		return s.runSenderMessagesPlan(ctx, plan, talkers, fallbackWindow, topN)
+	case "sender_semantic_search":
+		return s.runSenderTopicPlan(ctx, plan, talkers, fallbackWindow, topN)
+	case "keyword_search":
+		return s.runKeywordPlan(ctx, plan, query, talkers, fallbackWindow, topN)
+	case "chat_summary":
+		return s.runChatSummaryPlan(ctx, plan, talkers, fallbackWindow, topN)
+	case "stats":
+		return s.runStatsPlan(ctx, plan, talkers, fallbackWindow)
+	case "media_filter":
+		return s.runMediaPlan(ctx, plan, talkers, fallbackWindow, topN)
+	}
+	return nil, plan, nil
+}
+
+func (s *Service) runSenderTopicPlan(ctx context.Context, plan semanticQueryPlan, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+	entity := strings.TrimSpace(plan.Entity)
+	topic := strings.TrimSpace(plan.Topic)
+	if entity == "" || topic == "" {
+		return nil, plan, nil
+	}
+	_, label, start, end := parseSemanticWindow(defaultString(plan.Window, fallbackWindow))
+	if plan.Window == "yesterday" {
+		label, start, end = yesterdayWindow()
+	}
+	raw, err := s.collectSenderMessages(ctx, entity, talkers, start, end, label, 300)
+	if err != nil || raw == nil {
+		return raw, plan, err
+	}
+	summary, summaryErr := s.summarizeSemantic(ctx, "判断发言人是否提到主题", gin.H{
+		"entity":   entity,
+		"topic":    topic,
+		"window":   label,
+		"messages": raw.Evidence,
+	})
+	if summaryErr == nil && strings.TrimSpace(summary) != "" {
+		raw.Answer = summary
+	}
+	raw.Debug = mergeDebug(raw.Debug, semanticPlanDebug(plan, talkers, "direct/sender+llm"))
+	return raw, plan, nil
+}
+
+func (s *Service) runSenderMessagesPlan(ctx context.Context, plan semanticQueryPlan, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+	entity := strings.TrimSpace(plan.Entity)
+	if entity == "" {
+		return nil, plan, nil
+	}
+	_, label, start, end := parseSemanticWindow(plan.Window)
+	if plan.Window == "yesterday" {
+		label, start, end = yesterdayWindow()
+	}
+	result, err := s.collectSenderMessages(ctx, entity, talkers, start, end, label, topN)
+	if result != nil {
+		result.Debug = mergeDebug(result.Debug, semanticPlanDebug(plan, talkers, "direct/sql"))
+	}
+	return result, plan, err
+}
+
+func (s *Service) runKeywordPlan(ctx context.Context, plan semanticQueryPlan, query string, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+	keyword := strings.TrimSpace(plan.Topic)
+	if keyword == "" {
+		keyword = strings.TrimSpace(plan.Entity)
+	}
+	if keyword == "" {
+		keyword = strings.Trim(strings.TrimSpace(query), " ？?。.!！")
+	}
+	_, label, start, end := parseSemanticWindow(defaultString(plan.Window, fallbackWindow))
+	msgs, err := s.collectMessagesInTalkers(ctx, talkers, start, end, keyword, topN)
+	if err != nil {
+		return nil, plan, err
+	}
+	result := messagesDirectResult(fmt.Sprintf("包含“%s”的消息", keyword), label, msgs, topN)
+	result.Debug = semanticPlanDebug(plan, talkers, "direct/keyword")
+	return result, plan, nil
+}
+
+func (s *Service) runChatSummaryPlan(ctx context.Context, plan semanticQueryPlan, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+	scopedTalkers := s.resolvePlanTalkers(plan, talkers)
+	_, label, start, end := parseSemanticWindow(defaultString(plan.Window, fallbackWindow))
+	msgs, err := s.collectMessagesInTalkers(ctx, scopedTalkers, start, end, "", 500)
+	if err != nil {
+		return nil, plan, err
+	}
+	summary, summaryErr := s.summarizeSemantic(ctx, "会话聊天总结", gin.H{
+		"query":    plan,
+		"window":   label,
+		"messages": firstN(messagesToPlainRows(msgs), 120),
+	})
+	if summaryErr != nil || strings.TrimSpace(summary) == "" {
+		summary = fmt.Sprintf("找到%s内 %d 条消息，但摘要生成失败: %s", label, len(msgs), errorString(summaryErr))
+	}
+	result := messagesDirectResult("会话总结证据", label, firstN(msgs, topN), topN)
+	result.Answer = summary
+	result.Count = len(msgs)
+	result.Debug = semanticPlanDebug(plan, scopedTalkers, "direct/summary")
+	return result, plan, nil
+}
+
+func (s *Service) runStatsPlan(ctx context.Context, plan semanticQueryPlan, talkers []string, fallbackWindow string) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+	scopedTalkers := s.resolvePlanTalkers(plan, talkers)
+	_, label, start, end := parseSemanticWindow(defaultString(plan.Window, fallbackWindow))
+	msgs, err := s.collectMessagesInTalkers(ctx, scopedTalkers, start, end, "", 0)
+	if err != nil {
+		return nil, plan, err
+	}
+	result := &semanticDirectMessageResult{
+		Window:   label,
+		Count:    len(msgs),
+		Answer:   fmt.Sprintf("%s内共找到 %d 条消息，数据源会话数 %d。", label, len(msgs), len(scopedTalkers)),
+		Evidence: []gin.H{},
+		Debug:    semanticPlanDebug(plan, scopedTalkers, "direct/stats"),
+	}
+	return result, plan, nil
+}
+
+func (s *Service) runMediaPlan(ctx context.Context, plan semanticQueryPlan, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+	_, label, start, end := parseSemanticWindow(defaultString(plan.Window, fallbackWindow))
+	msgs, err := s.collectMessagesInTalkers(ctx, talkers, start, end, "", 1000)
+	if err != nil {
+		return nil, plan, err
+	}
+	msgType, subType, mediaLabel := semanticMediaType(plan.MsgType)
+	filtered := make([]*model.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		if msgType > 0 && msg.Type != msgType {
+			continue
+		}
+		if subType > 0 && msg.SubType != subType {
+			continue
+		}
+		if msgType == 0 && !messageHasMediaType(msg) {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	result := messagesDirectResult(mediaLabel+"消息", label, filtered, topN)
+	result.Debug = semanticPlanDebug(plan, talkers, "direct/media")
+	return result, plan, nil
+}
+
+func semanticMediaType(raw string) (int64, int64, string) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "image", "图片":
+		return model.MessageTypeImage, 0, "图片"
+	case "file", "文件":
+		return model.MessageTypeShare, model.MessageSubTypeFile, "文件"
+	case "voice", "语音":
+		return model.MessageTypeVoice, 0, "语音"
+	case "video", "视频":
+		return model.MessageTypeVideo, 0, "视频"
+	case "sticker", "表情", "动画表情":
+		return model.MessageTypeAnimation, 0, "表情"
+	case "text", "文本":
+		return model.MessageTypeText, 0, "文本"
+	default:
+		return 0, 0, "媒体"
+	}
+}
+
+func messageHasMediaType(msg *model.Message) bool {
+	if msg == nil {
+		return false
+	}
+	switch msg.Type {
+	case model.MessageTypeImage, model.MessageTypeVoice, model.MessageTypeVideo, model.MessageTypeAnimation:
+		return true
+	case model.MessageTypeShare:
+		return msg.SubType == model.MessageSubTypeFile ||
+			msg.SubType == model.MessageSubTypeLink ||
+			msg.SubType == model.MessageSubTypeMiniProgram ||
+			msg.SubType == model.MessageSubTypeChannel
+	default:
+		return false
+	}
+}
+
+func (s *Service) resolvePlanTalkers(plan semanticQueryPlan, fallback []string) []string {
+	for _, key := range []string{plan.Chat, plan.Entity} {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if room, err := s.db.GetChatRoom(key); err == nil && room != nil {
+			return []string{room.Name}
+		}
+		if contact, err := s.db.GetContact(key); err == nil && contact != nil {
+			return []string{contact.UserName}
+		}
+	}
+	return fallback
+}
+
+func semanticPlanDebug(plan semanticQueryPlan, talkers []string, retrieval string) gin.H {
+	return gin.H{
+		"intent":       plan.Intent,
+		"entity":       plan.Entity,
+		"topic":        plan.Topic,
+		"window":       plan.Window,
+		"chat":         plan.Chat,
+		"msg_type":     plan.MsgType,
+		"answer_mode":  plan.AnswerMode,
+		"needs_vector": plan.NeedsVector,
+		"confidence":   plan.Confidence,
+		"reason":       plan.Reason,
+		"source":       plan.Source,
+		"retrieval":    retrieval,
+		"talker_count": len(talkers),
+	}
+}
+
+func attachEntityDebug(debug gin.H, resolution semanticEntityResolution) gin.H {
+	if debug == nil {
+		debug = gin.H{}
+	}
+	debug["entity_query"] = resolution.Query
+	debug["entity_candidates"] = resolution.Candidates
+	debug["entity_candidate_count"] = len(resolution.Candidates)
+	debug["entity_ambiguous"] = resolution.Ambiguous
+	return debug
+}
+
+func mergeDebug(base gin.H, extra gin.H) gin.H {
+	if base == nil {
+		base = gin.H{}
+	}
+	for k, v := range extra {
+		base[k] = v
+	}
+	return base
+}
+
+func attachEmptyReason(debug gin.H, reason string) gin.H {
+	if strings.TrimSpace(reason) == "" {
+		return debug
+	}
+	if debug == nil {
+		debug = gin.H{}
+	}
+	debug["empty_reason"] = reason
+	return debug
+}
+
+func semanticVectorQuery(query string, plan semanticQueryPlan) string {
+	switch plan.Intent {
+	case "sender_semantic_search", "chat_semantic_search", "semantic_search":
+		if strings.TrimSpace(plan.Topic) != "" {
+			return strings.TrimSpace(plan.Topic)
+		}
+	}
+	return query
+}
+
+func (s *Service) collectMessagesInTalkers(ctx context.Context, talkers []string, start, end time.Time, keyword string, limit int) ([]*model.Message, error) {
+	if len(talkers) == 0 {
+		var err error
+		talkers, err = s.semanticTalkerScope("", "", 50)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out := make([]*model.Message, 0)
+	perTalkerLimit := limit
+	if perTalkerLimit <= 0 {
+		perTalkerLimit = 5000
+	} else if perTalkerLimit < 200 {
+		perTalkerLimit = 200
+	}
+	for _, talker := range talkers {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		msgs, err := s.db.GetMessages(start, end, talker, "", regexp.QuoteMeta(keyword), perTalkerLimit, 0)
+		if err != nil {
+			continue
+		}
+		out = append(out, msgs...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out, nil
+}
+
+func messagesDirectResult(title, window string, msgs []*model.Message, topN int) *semanticDirectMessageResult {
+	total := len(msgs)
+	if topN <= 0 {
+		topN = 20
+	}
+	if len(msgs) > topN {
+		msgs = msgs[len(msgs)-topN:]
+	}
+	evidence := messagesToEvidence(msgs)
+	lines := make([]string, 0, len(msgs))
+	for i, msg := range msgs {
+		lines = append(lines, fmt.Sprintf("%d. [%s][%s/%s] %s",
+			i+1,
+			msg.Time.Format("2006-01-02 15:04:05"),
+			pickText(msg.TalkerName, msg.Talker),
+			pickText(msg.SenderName, msg.Sender),
+			singleLineText(msg.PlainTextContent()),
+		))
+	}
+	answer := fmt.Sprintf("%s：%s内没有找到匹配消息。", title, window)
+	reason := "时间窗和数据源范围内没有匹配消息"
+	if total > 0 {
+		answer = fmt.Sprintf("%s：%s内找到 %d 条消息，展示最近 %d 条：\n%s", title, window, total, len(msgs), strings.Join(lines, "\n"))
+		reason = ""
+	}
+	return &semanticDirectMessageResult{
+		Window:   window,
+		Count:    total,
+		Answer:   answer,
+		Evidence: evidence,
+		Reason:   reason,
+	}
+}
+
+func messagesToEvidence(msgs []*model.Message) []gin.H {
+	out := make([]gin.H, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		content := singleLineText(msg.PlainTextContent())
+		if content == "" {
+			content = formatMessageType(msg.Type)
+		}
+		out = append(out, gin.H{
+			"talker":      msg.Talker,
+			"talker_name": pickText(msg.TalkerName, msg.Talker),
+			"sender":      msg.Sender,
+			"sender_name": pickText(msg.SenderName, msg.Sender),
+			"seq":         msg.Seq,
+			"time":        msg.Time.Unix(),
+			"type":        msg.Type,
+			"sub_type":    msg.SubType,
+			"content":     content,
+		})
+	}
+	return out
+}
+
+func messagesToPlainRows(msgs []*model.Message) []gin.H {
+	out := make([]gin.H, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		out = append(out, gin.H{
+			"time":   msg.Time.Format("2006-01-02 15:04:05"),
+			"chat":   pickText(msg.TalkerName, msg.Talker),
+			"sender": pickText(msg.SenderName, msg.Sender),
+			"text":   singleLineText(msg.PlainTextContent()),
+		})
+	}
+	return out
+}
+
+func yesterdayWindow() (string, time.Time, time.Time) {
+	now := time.Now()
+	loc := now.Location()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	return "昨天", todayStart.AddDate(0, 0, -1), todayStart.Add(-time.Nanosecond)
+}
+
+func (s *Service) trySemanticDirectSenderMessages(ctx context.Context, query string, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, error) {
+	entity, window, start, end, ok := parseDirectSenderMessageQuery(query, fallbackWindow)
+	if !ok {
+		return nil, nil
+	}
+	if topN <= 0 {
+		topN = 20
+	}
+	if len(talkers) == 0 {
+		var err error
+		talkers, err = s.semanticTalkerScope("", "", 50)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.collectSenderMessages(ctx, entity, talkers, start, end, window, topN)
+}
+
+func (s *Service) collectSenderMessages(ctx context.Context, entity string, talkers []string, start, end time.Time, window string, topN int) (*semanticDirectMessageResult, error) {
+	resolution := s.resolveSenderEntity(entity, talkers)
+	senderIDs := map[string]struct{}{}
+	for _, candidate := range resolution.Candidates {
+		if strings.TrimSpace(candidate.Username) != "" {
+			senderIDs[candidate.Username] = struct{}{}
+		}
+	}
+	hits := make([]*model.Message, 0, topN)
+	const perTalkerLimit = 3000
+	for _, talker := range talkers {
+		if strings.TrimSpace(talker) == "" {
+			continue
+		}
+		msgs, err := s.db.GetMessages(start, end, talker, "", "", perTalkerLimit, 0)
+		if err != nil {
+			continue
+		}
+		for _, msg := range msgs {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			if senderMessageMatches(msg, entity, senderIDs) {
+				hits = append(hits, msg)
+			}
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].Seq < hits[j].Seq })
+	total := len(hits)
+	if len(hits) > topN {
+		hits = hits[len(hits)-topN:]
+	}
+	evidence := make([]gin.H, 0, len(hits))
+	lines := make([]string, 0, len(hits))
+	for i, msg := range hits {
+		content := singleLineText(msg.PlainTextContent())
+		if content == "" {
+			content = formatMessageType(msg.Type)
+		}
+		ts := msg.Time.Format("2006-01-02 15:04:05")
+		talkerName := pickText(msg.TalkerName, msg.Talker)
+		senderName := pickText(msg.SenderName, msg.Sender)
+		lines = append(lines, fmt.Sprintf("%d. [%s][%s/%s] %s", i+1, ts, talkerName, senderName, content))
+		evidence = append(evidence, gin.H{
+			"talker":      msg.Talker,
+			"talker_name": talkerName,
+			"sender":      msg.Sender,
+			"sender_name": senderName,
+			"seq":         msg.Seq,
+			"time":        msg.Time.Unix(),
+			"type":        msg.Type,
+			"sub_type":    msg.SubType,
+			"content":     content,
+		})
+	}
+	answer := fmt.Sprintf("没有找到 %s 在%s发的消息。", entity, window)
+	reason := "实体未解析到候选，或候选在时间窗和数据源范围内没有发言"
+	if total > 0 {
+		answer = fmt.Sprintf("找到 %s 在%s发的 %d 条消息，展示最近 %d 条：\n%s", entity, window, total, len(hits), strings.Join(lines, "\n"))
+		reason = ""
+	}
+	return &semanticDirectMessageResult{
+		Window:   window,
+		Count:    total,
+		Answer:   answer,
+		Evidence: evidence,
+		Debug:    attachEntityDebug(nil, resolution),
+		Reason:   reason,
+	}, nil
+}
+
+func parseDirectSenderMessageQuery(query, fallbackWindow string) (string, string, time.Time, time.Time, bool) {
+	raw := strings.TrimSpace(query)
+	if raw == "" {
+		return "", "", time.Time{}, time.Time{}, false
+	}
+	raw = strings.Trim(raw, " ？?。.!！")
+	needMessageIntent := strings.Contains(raw, "发的消息") ||
+		strings.Contains(raw, "发送的消息") ||
+		strings.Contains(raw, "说的消息") ||
+		strings.Contains(raw, "讲的消息") ||
+		strings.Contains(raw, "发了什么") ||
+		strings.Contains(raw, "说了什么") ||
+		strings.Contains(raw, "讲了什么")
+	if !needMessageIntent {
+		return "", "", time.Time{}, time.Time{}, false
+	}
+	verbIdx := len(raw)
+	for _, marker := range []string{"发的消息", "发送的消息", "说的消息", "讲的消息", "发了什么", "说了什么", "讲了什么"} {
+		if idx := strings.Index(raw, marker); idx >= 0 && idx < verbIdx {
+			verbIdx = idx
+		}
+	}
+	if verbIdx <= 0 || verbIdx >= len(raw) {
+		return "", "", time.Time{}, time.Time{}, false
+	}
+	entityPart := strings.TrimSpace(raw[:verbIdx])
+	entity, windowKey := stripDirectTimeWord(entityPart)
+	if strings.TrimSpace(entity) == "" {
+		return "", "", time.Time{}, time.Time{}, false
+	}
+	if windowKey == "" {
+		windowKey = fallbackWindow
+	}
+	window, label, start, end := parseSemanticWindow(windowKey)
+	if windowKey == "yesterday" {
+		now := time.Now()
+		loc := now.Location()
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+		start = todayStart.AddDate(0, 0, -1)
+		end = todayStart.Add(-time.Nanosecond)
+		window = "yesterday"
+		label = "昨天"
+	}
+	return entity, labelOrKey(label, window), start, end, true
+}
+
+func stripDirectTimeWord(s string) (string, string) {
+	s = strings.TrimSpace(s)
+	timeWords := []struct {
+		Word string
+		Key  string
+	}{
+		{"今天", "today"},
+		{"昨日", "yesterday"},
+		{"昨天", "yesterday"},
+		{"近七天", "7d"},
+		{"最近七天", "7d"},
+		{"近7天", "7d"},
+		{"最近7天", "7d"},
+		{"近一月", "30d"},
+		{"近1月", "30d"},
+		{"最近一月", "30d"},
+		{"最近1月", "30d"},
+	}
+	for _, item := range timeWords {
+		if strings.HasSuffix(s, item.Word) {
+			return strings.TrimSpace(strings.TrimSuffix(s, item.Word)), item.Key
+		}
+		if strings.HasPrefix(s, item.Word) {
+			return strings.TrimSpace(strings.TrimPrefix(s, item.Word)), item.Key
+		}
+	}
+	return s, ""
+}
+
+func (s *Service) resolveSenderIDs(entity string) map[string]struct{} {
+	out := map[string]struct{}{}
+	entity = strings.TrimSpace(entity)
+	if entity == "" {
+		return out
+	}
+	if contact, err := s.db.GetContact(entity); err == nil && contact != nil {
+		out[contact.UserName] = struct{}{}
+	}
+	if contacts, err := s.db.GetContacts(entity, 20, 0); err == nil && contacts != nil {
+		for _, contact := range contacts.Items {
+			if contact != nil && strings.TrimSpace(contact.UserName) != "" {
+				out[contact.UserName] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func (s *Service) resolveSenderEntity(entity string, talkers []string) semanticEntityResolution {
+	res := semanticEntityResolution{Query: strings.TrimSpace(entity)}
+	seen := map[string]struct{}{}
+	add := func(username, display, kind, source string) {
+		username = strings.TrimSpace(username)
+		if username == "" {
+			return
+		}
+		key := kind + ":" + username + ":" + display
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		res.Candidates = append(res.Candidates, semanticEntityCandidate{
+			Username: username,
+			Display:  strings.TrimSpace(display),
+			Kind:     kind,
+			Source:   source,
+		})
+	}
+	entity = strings.TrimSpace(entity)
+	if entity == "" {
+		return res
+	}
+	if entity == "我" || entity == "自己" || strings.EqualFold(entity, "me") {
+		add("self", "我", "self", "builtin")
+		return res
+	}
+	if contact, err := s.db.GetContact(entity); err == nil && contact != nil {
+		add(contact.UserName, contact.DisplayName(), "contact", "exact")
+	}
+	if contacts, err := s.db.GetContacts(entity, 20, 0); err == nil && contacts != nil {
+		for _, contact := range contacts.Items {
+			if contact == nil {
+				continue
+			}
+			add(contact.UserName, contact.DisplayName(), "contact", "search")
+		}
+	}
+	for _, talker := range talkers {
+		room, err := s.db.GetChatRoom(talker)
+		if err != nil || room == nil {
+			continue
+		}
+		for _, user := range room.Users {
+			display := strings.TrimSpace(room.User2DisplayName[user.UserName])
+			if display == "" {
+				display = strings.TrimSpace(user.DisplayName)
+			}
+			if directNameMatch(entity, display) || directNameMatch(entity, user.UserName) {
+				add(user.UserName, display, "room_member", room.DisplayName())
+			}
+		}
+	}
+	res.Ambiguous = len(res.Candidates) > 1
+	return res
+}
+
+func senderMessageMatches(msg *model.Message, entity string, senderIDs map[string]struct{}) bool {
+	if msg == nil {
+		return false
+	}
+	entity = strings.TrimSpace(entity)
+	if entity == "" {
+		return false
+	}
+	if entity == "我" || entity == "自己" || strings.EqualFold(entity, "me") {
+		return msg.IsSelf
+	}
+	if _, ok := senderIDs[msg.Sender]; ok {
+		return true
+	}
+	candidates := []string{msg.Sender, msg.SenderName}
+	if !msg.IsChatRoom && !msg.IsSelf {
+		candidates = append(candidates, msg.Talker, msg.TalkerName)
+	}
+	for _, item := range candidates {
+		if directNameMatch(entity, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func directNameMatch(queryName, candidate string) bool {
+	queryName = strings.TrimSpace(strings.ToLower(queryName))
+	candidate = strings.TrimSpace(strings.ToLower(candidate))
+	if queryName == "" || candidate == "" {
+		return false
+	}
+	return queryName == candidate || strings.Contains(candidate, queryName)
+}
+
+func labelOrKey(label, key string) string {
+	if strings.TrimSpace(label) != "" {
+		return label
+	}
+	return key
+}
+
 func (s *Service) ensureSemanticIndexReady() error {
 	if s.semantic == nil {
 		return fmt.Errorf("semantic manager unavailable")
@@ -620,7 +1791,7 @@ func (s *Service) ensureSemanticIndexReady() error {
 	if st.IndexedCount <= 0 {
 		return fmt.Errorf("semantic index is empty, please build index first")
 	}
-	if st.Pending > 0 || st.Failed > 0 {
+	if st.Pending > 0 {
 		return fmt.Errorf("semantic index not ready: pending=%d failed=%d", st.Pending, st.Failed)
 	}
 	return nil
@@ -632,10 +1803,7 @@ func summarizeTopics(msgs []*model.Message, topN int) []map[string]any {
 		if m == nil {
 			continue
 		}
-		txt := strings.TrimSpace(m.PlainTextContent())
-		if txt == "" {
-			txt = strings.TrimSpace(m.Content)
-		}
+		txt := semantic.NormalizeMessageText(m)
 		if txt != "" {
 			texts = append(texts, txt)
 		}
@@ -797,6 +1965,41 @@ func singleLineText(s string) string {
 		return string([]rune(s)[:200]) + "..."
 	}
 	return s
+}
+
+func toJSONString(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func (s *Service) summarizeSemantic(ctx context.Context, title string, payload any) (string, error) {
+	if s.semantic == nil {
+		return "", nil
+	}
+	raw := toJSONString(payload)
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	sumCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	return s.semantic.Summarize(sumCtx, title, raw)
+}
+
+func firstN[T any](items []T, n int) []T {
+	if n <= 0 || len(items) <= n {
+		return items
+	}
+	return items[:n]
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 type hookHermesWeixinReq struct {

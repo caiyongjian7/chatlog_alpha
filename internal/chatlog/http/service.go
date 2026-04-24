@@ -139,7 +139,7 @@ func (s *Service) Start() error {
 
 	go func() {
 		// Handle error from Run
-		if err := s.server.ListenAndServe(); err != nil {
+		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Err(err).Msg("Failed to start HTTP server")
 		}
 	}()
@@ -254,7 +254,12 @@ func (s *Service) runSemanticIncrementalWatcher(ctx context.Context) {
 		}
 	}
 
-	// 启动后先跑一次检测，后续定时增量。
+	// 启动后主动跑一次增量，补齐服务关闭期间产生的消息。
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	if err := s.semantic.Incremental(runCtx); err != nil {
+		log.Debug().Err(err).Msg("semantic startup incremental failed")
+	}
+	cancel()
 	tryIncremental()
 	for {
 		select {

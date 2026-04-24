@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -128,6 +129,9 @@ func (s *Service) GetChatRoom(key string) (*model.ChatRoom, error) {
 
 // GetSession retrieves session information
 func (s *Service) GetSessions(key string, limit, offset int) (*wechatdb.GetSessionsResp, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("database not ready")
+	}
 	return s.db.GetSessions(key, limit, offset)
 }
 

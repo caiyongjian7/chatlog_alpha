@@ -6,6 +6,26 @@
 
 ## 更新日志（近期）
 
+### 2026-04-24
+
+- 优化配置日志安全：TUI/HTTP 服务启动日志会对 `data_key`、`img_key`、`api_key`、`token`、`secret` 等敏感字段脱敏。
+- 优化语义增量索引：HTTP 服务启动后会主动执行一次增量索引，用于补齐程序关闭期间新增的聊天记录。
+- 优化向量索引状态口径：构建进度现在按“成功 + 失败 + 待处理”展示，`pending` 不再包含已失败项。
+- 优化前端数据库面板：数据库可查询性探测改为限流并发，避免数据库文件较多时瞬时请求过多。
+- 同步 TUI 帮助：补充仪表盘、推送页面、实验性语义能力和全局搜索入口。
+- GLM 实验性功能接入 `glm-5.1` Chat Completions：会话问答升级为基于检索证据的 LLM 回答，并显示引用证据。
+- 会话问答默认使用 GLM 流式输出，前端以打字机效果逐步展示回答。
+- 实验性功能页面重构为 GPT 网页端式聊天交互；模型配置、索引状态、删除索引、重建索引和参数调优统一收入对话框下方的“配置与索引管理”二级面板。
+- 语义问答/搜索的数据源改为“最近会话 -> username -> 时间窗聊天记录”的作用域逻辑，支持最近会话数量、指定单个 chat、勾选多个会话和时间窗过滤。
+- 会话问答新增 LLM 意图路由：GLM 会先输出受限 JSON 计划，系统再按 `sender_messages`、`sender_semantic_search`、`chat_summary`、`stats`、`keyword_search`、`semantic_search` 等 intent 调用结构化查询、LLM 摘要或向量 RAG；前端会显示本次 `intent/entity/topic/route` 调试信息。
+- 优化会话问答 RAG：自动补充命中消息前后上下文，支持前端多轮追问上下文，并强化证据防注入提示。
+- 调整 GLM Embedding 默认维度为 `2048`；embedding 批量请求按最多 64 条拆分，单条输入按 3072 token 近似上限截断。
+- 优化语义索引入库内容：过滤纯图片/视频/语音占位、语音通话、撤回消息和常见短确认，降低低信息消息对召回和主题分析的干扰。
+- 主题趋势和联系人画像在原图表/词频基础上新增 GLM-5.1 摘要，帮助解释趋势、画像和注意点。
+- 向量索引重建改为后台任务，接口会立即返回任务已接收，前端通过状态面板查看进度。
+- 增量索引改为“扫描会话、只重算新增或内容变更消息”，可覆盖旧消息后续补解析导致的内容变化。
+- 索引失败项改为部分可用：存在失败会话时，已完成索引仍可用于语义搜索/问答，失败会话会在状态中单独展示。
+
 ### 2026-04-23
 
 - 新增“实验性功能”页面，承载 `GLM 语义检索与重排序` 全量入口（配置、连通性测试、索引管理、语义搜索、会话问答、主题趋势、联系人画像）。
@@ -180,6 +200,7 @@ ls -l "$BIN_PATH"
 - `POST /api/v1/semantic/index/clear`
 - `GET /api/v1/semantic/search`
 - `POST /api/v1/semantic/qa`
+  - `POST /api/v1/semantic/qa/stream`（SSE 流式问答，前端默认使用）
 - `GET /api/v1/semantic/topics`
 - `GET /api/v1/semantic/profiles`
 
@@ -251,15 +272,17 @@ YAML 可读性优化：
 - `quick`：优先性能，适合前端实时搜索。
 - `deep`：覆盖更全，会额外尝试解析压缩消息体和部分二进制字段，速度更慢。
 
-## GLM 语义能力（Embedding-3 + Rerank）
+## GLM 语义能力（Embedding-3 + Rerank + GLM-5.1）
 
 前端入口：
 
-- 根页面 `http://127.0.0.1:5030/` 的“实验性功能”标签页中使用“GLM 语义检索与重排序”面板。
+- 根页面 `http://127.0.0.1:5030/` 的“实验性功能”标签页现在是 GPT 网页端式聊天入口。
+- 右侧可设置时间窗、最近会话数量、指定单个 chat 或勾选多个最近会话作为数据源。
+- 对话框下方的“配置与索引管理”二级面板中提供模型参数、连通性测试、索引状态、删除索引、重建索引（断点续传）和主题/画像工具。
 
 配置与测试：
 
-- 支持配置 `api_key`、`base_url`、`embedding_model`、`rerank_model`、`embedding_dimension`、`recall_k`、`top_n`、`similarity_threshold`。
+- 支持配置 `api_key`、`base_url`、`embedding_model`、`rerank_model`、`chat_model`、`chat_max_tokens`、`chat_temperature`、`embedding_dimension`、`recall_k`、`top_n`、`similarity_threshold`。
 - 支持配置 `index_workers`（并发索引线程数，默认 4，最大 32）。
 - 语义能力属于实验性固定能力（前端不可关闭）；仅在“连通性通过 + 索引就绪”后可使用检索/问答等动作。
 - `api_key` 无默认值；`GET /api/v1/semantic/config` 不回显真实 key，仅返回 `has_api_key` 标记。
@@ -267,6 +290,10 @@ YAML 可读性优化：
 - 默认模型：
   - embedding：`embedding-3`
   - rerank：`rerank`
+  - chat：`glm-5.1`
+- 默认向量维度为 `2048`。如果从旧版本的 `512` 维切换到 `2048` 维，需要重建向量索引。
+- Embedding 请求限制：单次数组最多 64 条；单条输入最多约 3072 tokens，服务端会按该上限做近似截断并自动拆批。
+- `chat_model` 通过 GLM Chat Completions 调用，默认请求路径为 `<base_url>/chat/completions`。
 
 向量索引：
 
@@ -275,25 +302,41 @@ YAML 可读性优化：
     - 基础构建状态：`indexed_count` / `processed` / `failed` / `pending` / `total` / `progress_pct`
     - 增量状态：`last_incremental_at` / `last_incremental_added` / `last_incremental_error`
     - 重排序状态：`last_rerank_at` / `last_rerank_applied` / `last_rerank_error`
+  - `pending` 仅表示未处理会话数；构建进度按 `processed + failed` 计算，失败项会单独展示。
 - 重建索引：`POST /api/v1/semantic/index/rebuild`
   - `reset=0`（默认）：断点续传，继续上次中断进度
   - `reset=1`：从头重建（先清空索引）
+  - 当前为后台任务：接口返回 `accepted=true` 后，通过 `GET /api/v1/semantic/index/status` 查看进度。
 - 删除索引：`POST /api/v1/semantic/index/clear`
 - 本地索引库路径：`<WorkDir>/.chatlog_semantic/vector_index.db`
 
 已接入能力（6项）：
 
-1. 语义全局检索：`GET /api/v1/semantic/search?query=...&chat=...`
+1. 语义全局检索：`GET /api/v1/semantic/search?query=...&chat=...&window=7d&source_limit=50`
 2. 检索精排：`semantic/search` 默认开启 rerank（可配置关闭）
 3. 语义告警触发：关键词钩子在字面未命中时，会按配置尝试语义匹配（`enable_semantic_push`）
-4. 会话级问答（RAG 检索证据）：`POST /api/v1/semantic/qa`
-5. 主题聚类/趋势（轻量统计版）：`GET /api/v1/semantic/topics`
-6. 联系人/发送者语义画像（关键词聚合）：`GET /api/v1/semantic/profiles`
+4. 会话级问答（RAG 检索证据 + 前后文扩展 + GLM 流式生成）：`POST /api/v1/semantic/qa/stream`
+5. 主题聚类/趋势（统计图表 + LLM 摘要）：`GET /api/v1/semantic/topics`
+6. 联系人/发送者语义画像（关键词聚合 + LLM 摘要）：`GET /api/v1/semantic/profiles`
 
 说明：
 
-- 当前 5/6 项以“可追溯证据检索 + 轻量主题词统计”为主，适合先在线验证；后续可替换为更强聚类算法或 LLM 生成摘要。
+- 语义问答和搜索在未指定 `chat/chats` 时，会先读取最近会话列表，再按每个会话的 `username` 到向量库中检索指定时间窗内的聊天记录。
+- `chat` 表示单会话强制过滤；`chats` 支持逗号分隔多个 `username`；`window` 支持 `today`、`7d`、`30d`、`all`。
+- 对“某人今天发的消息 / 某人昨天说了什么 / 某人近7天发的消息”这类精确条件问题，问答接口会优先走联系人/群成员实体解析 + 原始消息 sender 过滤，不依赖向量相似度碰运气；其他开放问题仍走向量 RAG。
+- 对“某人有没有提到某事”这类混合问题，问答接口会先解析发言人，再拉取该发言人的时间窗消息，并使用 GLM 基于证据判断和总结；避免仅靠消息正文向量匹配昵称。
+- 对“今天有哪些图片/文件/语音/视频/表情”这类媒体过滤问题，问答接口会直接按消息类型过滤原始消息，不走向量召回。
+- 索引状态新增覆盖度：展示已索引会话数、已知会话数、未覆盖会话数和最近索引消息时间，便于判断为什么某个会话可能问不到。
+- 实体解析会在调试信息中返回候选数量和是否歧义；多个联系人或群成员同名时，前端会标出 `candidates=N(歧义)`。
+- LLM 路由现在会做 schema 校验和一次重试；返回会包含 `answer_mode`（list/summary/stats），空结果会展示明确原因。
+- 存在实体歧义时，前端会在证据区域列出候选实体（显示名、类型、来源、username），便于继续指定更精确对象。
+- 前端问答结果顶部会展示调试信息，例如 `intent=sender_semantic_search | route=llm/direct/sender+llm | entity=张三 | topic=合同延期`，用于排查实体解析、时间窗和检索路径。
+- 当前 5/6 项仍以轻量统计为基础，LLM 摘要用于解释结果；后续可替换为更强中文分词、聚类算法或长期画像模型。
 - `realtime_index` 开启时，服务运行期间会根据会话 `NOrder` 变化自动触发增量建索引；语义检索前也会再做一次兜底增量。
+- HTTP 服务启动后会额外执行一次增量索引，用于补齐程序或微信客户端关闭期间产生、但尚未写入索引库的消息。
+- 增量索引会扫描会话内消息并按 `content_hash` 跳过未变化内容；新增消息和内容变更消息会重新向量化。
+- 语义索引会跳过低信息内容：纯媒体占位（如 `[图片]`、`[视频]`、`[语音]`）、语音通话、撤回消息和常见短确认。历史接口仍完整返回这些消息。
+- 索引存在失败会话时，已完成部分仍可用于搜索/问答；失败会话会在状态字段 `failed_talkers` 中展示。
 
 ## 朋友圈媒体代理解密
 

@@ -104,6 +104,17 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
+        .typing-cursor {
+            display: inline-block;
+            color: var(--primary);
+            animation: cursorBlink 0.9s steps(2, start) infinite;
+        }
+
+        @keyframes cursorBlink {
+            0%, 45% { opacity: 1; }
+            46%, 100% { opacity: 0; }
+        }
+
         /* Forms */
         .form-grid {
             display: grid;
@@ -136,6 +147,218 @@
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        /* config display mode — gray until dblclick */
+        input[type="text"].semantic-cfg,
+        input[type="number"].semantic-cfg {
+            color: #9ca3af;
+            background: #f9fafb;
+            border: 1px dashed #d1d5db;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        input[type="text"].semantic-cfg:hover,
+        input[type="number"].semantic-cfg:hover {
+            color: #6b7280;
+            border-color: #9ca3af;
+            background: #f3f4f6;
+        }
+        input[type="text"].semantic-cfg.editing,
+        input[type="number"].semantic-cfg.editing {
+            color: var(--text-main);
+            background: #fff;
+            border: 1px solid var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+            cursor: text;
+        }
+        .semantic-cfg.saving {
+            border-color: var(--success) !important;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15) !important;
+        }
+        .cfg-hint {
+            display: inline-block;
+            font-size: 0.75rem;
+            color: #d1d5db;
+            margin-left: 4px;
+        }
+
+        .semantic-shell {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 320px;
+            gap: 18px;
+            align-items: start;
+        }
+
+        .semantic-chat-panel,
+        .semantic-side-panel {
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            overflow: hidden;
+        }
+
+        .semantic-chat-header {
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .semantic-chat-thread {
+            min-height: 480px;
+            max-height: 62vh;
+            overflow-y: auto;
+            padding: 20px;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(37, 99, 235, 0.08), transparent 26%),
+                radial-gradient(circle at 92% 12%, rgba(16, 185, 129, 0.08), transparent 28%),
+                #fbfdff;
+        }
+
+        .semantic-message {
+            display: flex;
+            margin-bottom: 16px;
+        }
+
+        .semantic-message.user {
+            justify-content: flex-end;
+        }
+
+        .semantic-bubble {
+            max-width: min(760px, 88%);
+            padding: 12px 14px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: #fff;
+            white-space: pre-wrap;
+            line-height: 1.65;
+        }
+
+        .semantic-message.user .semantic-bubble {
+            background: #1f2937;
+            color: #fff;
+            border-color: #1f2937;
+        }
+
+        .semantic-composer {
+            padding: 14px;
+            border-top: 1px solid var(--border);
+            background: #fff;
+        }
+
+        .semantic-composer textarea {
+            width: 100%;
+            min-height: 76px;
+            resize: vertical;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 12px;
+            font-size: 0.98rem;
+            line-height: 1.5;
+        }
+
+        .semantic-side-panel {
+            padding: 14px;
+            position: sticky;
+            top: 16px;
+        }
+
+        .semantic-source-list {
+            max-height: 230px;
+            overflow: auto;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #fff;
+            padding: 8px;
+        }
+
+        .semantic-source-item {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            padding: 6px 4px;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 0.86rem;
+        }
+
+        .semantic-source-item:last-child {
+            border-bottom: 0;
+        }
+
+        .semantic-manager {
+            margin-top: 16px;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: #fff;
+            padding: 16px;
+        }
+
+        .semantic-manager summary {
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 1rem;
+        }
+
+        .semantic-config-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .semantic-config-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            background: #ffffff;
+            padding: 12px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }
+
+        .semantic-config-card.wide {
+            grid-column: 1 / -1;
+        }
+
+        .semantic-config-card h4 {
+            margin: 0 0 10px 0;
+            font-size: 0.95rem;
+        }
+
+        .semantic-config-card .form-group {
+            margin-bottom: 10px;
+        }
+
+        .semantic-config-card .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .semantic-config-compact {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .semantic-fixed-flags {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            font-size: 0.88rem;
+        }
+
+        @media (max-width: 980px) {
+            .semantic-shell {
+                grid-template-columns: 1fr;
+            }
+            .semantic-side-panel {
+                position: static;
+            }
+            .semantic-config-grid,
+            .semantic-config-compact,
+            .semantic-fixed-flags {
+                grid-template-columns: 1fr;
+            }
         }
 
         .actions {
@@ -698,117 +921,142 @@
 
         <div id="experimental" class="tab-content">
             <h2>实验性功能</h2>
-            <h3 style="margin-top:12px;">GLM 语义检索与重排序</h3>
-            <p class="text-gray" style="margin-bottom: 12px;">实验性能力：功能固定开启不可关闭；仅在向量索引建立完成后可用。</p>
-            <div class="form-grid">
-                <div class="form-group">
-                    <label><input type="checkbox" id="semantic-enabled" checked disabled> 启用语义能力（固定开启）</label>
+            <p class="text-gray" style="margin-bottom: 16px;">主入口改为聊天式问答。数据源先读取最近会话，再按 username 和时间窗使用已向量化内容检索；新增内容和历史未向量化内容会通过增量索引补齐。</p>
+            <div class="semantic-shell">
+                <div class="semantic-chat-panel">
+                    <div class="semantic-chat-header">
+                        <div>
+                            <strong>Chatlog Assistant</strong>
+                            <div class="text-sm text-gray">基于微信聊天记录的语义问答，默认流式输出。</div>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="clearSemanticQAHistory()">清空对话</button>
+                    </div>
+                    <div id="semantic-chat-thread" class="semantic-chat-thread">
+                        <div class="semantic-message assistant">
+                            <div class="semantic-bubble">选择时间窗和数据源后直接提问。索引未完成时，问答会被禁用；请在下方“配置与索引管理”中查看或重建向量索引。</div>
+                        </div>
+                    </div>
+                    <div class="semantic-composer">
+                        <textarea id="semantic-query" placeholder="输入问题，例如：近七天有哪些异常告警？Shift+Enter 换行，Enter 发送"></textarea>
+                        <div class="actions" style="margin-top:10px;padding-top:10px;">
+                            <button class="btn btn-primary" id="semantic-qa-btn" onclick="runSemanticQA()">发送</button>
+                            <button class="btn btn-secondary" id="semantic-search-btn" onclick="runSemanticSearch()">只检索证据</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="semantic-enable-rerank" checked disabled> 启用重排序（固定开启）</label>
-                </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="semantic-enable-push" checked disabled> 启用语义关键词推送（固定开启）</label>
-                </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="semantic-realtime-index" checked disabled> 实时增量索引（固定开启）</label>
-                </div>
-                <div class="form-group" style="grid-column: span 2;">
-                    <label>GLM API Key</label>
-                    <input type="text" id="semantic-api-key" placeholder="填写 BigModel API Key">
-                    <div id="semantic-api-key-state" class="text-sm text-gray" style="margin-top:4px;">未保存 API Key</div>
-                    <div class="text-sm text-gray">用于调用 GLM embedding/rerank 接口；仅本地保存，不在页面回显。</div>
-                </div>
-                <div class="form-group" style="grid-column: span 2;">
-                    <label>Base URL</label>
-                    <input type="text" id="semantic-base-url" placeholder="https://open.bigmodel.cn/api/paas/v4">
-                    <div class="text-sm text-gray">GLM 服务地址，通常保持默认；仅在网关/代理场景下修改。</div>
-                </div>
-                <div class="form-group">
-                    <label>Embedding Model</label>
-                    <input type="text" id="semantic-embedding-model" value="embedding-3">
-                    <div class="text-sm text-gray">向量化模型名，决定语义召回质量与成本。</div>
-                </div>
-                <div class="form-group">
-                    <label>Rerank Model</label>
-                    <input type="text" id="semantic-rerank-model" value="rerank">
-                    <div class="text-sm text-gray">重排序模型名，用于对召回结果二次精排。</div>
-                </div>
-                <div class="form-group">
-                    <label>向量维度</label>
-                    <input type="number" id="semantic-embedding-dim" value="512" min="256" max="2048">
-                    <div class="text-sm text-gray">需与 embedding 模型输出维度一致；不一致会导致检索异常。</div>
-                </div>
-                <div class="form-group">
-                    <label>召回 TopK</label>
-                    <input type="number" id="semantic-recall-k" value="80" min="5" max="1000">
-                    <div class="text-sm text-gray">初筛候选数量，越大召回更全但更慢；建议 40-150。</div>
-                </div>
-                <div class="form-group">
-                    <label>并发线程数</label>
-                    <input type="number" id="semantic-index-workers" value="4" min="1" max="32">
-                    <div class="text-sm text-gray">索引构建并发度，越大越快但占用更多 CPU/内存。</div>
-                </div>
-                <div class="form-group">
-                    <label>返回 TopN</label>
-                    <input type="number" id="semantic-top-n" value="20" min="1" max="200">
-                    <div class="text-sm text-gray">最终返回结果数，应不大于召回 TopK。</div>
-                </div>
-                <div class="form-group">
-                    <label>相似度阈值</label>
-                    <input type="number" id="semantic-threshold" value="0.55" min="0.01" max="1" step="0.01">
-                    <div class="text-sm text-gray">过滤低相关结果；升高更严格，降低更宽松（常用 0.45-0.75）。</div>
-                </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="semantic-enable-qa" checked disabled> 会话问答（固定开启）</label>
-                </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="semantic-enable-topics" checked disabled> 主题趋势（固定开启）</label>
-                </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="semantic-enable-profiles" checked disabled> 联系人画像（固定开启）</label>
-                </div>
-            </div>
-            <div class="actions">
-                <button class="btn btn-secondary" onclick="testSemanticConfig()">测试连通性</button>
-                <button class="btn btn-primary" onclick="saveSemanticConfig()">保存语义配置</button>
-                <button class="btn btn-secondary" onclick="loadSemanticConfigAndStatus()">刷新状态</button>
-                <label class="text-sm" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="semantic-rebuild-reset"> 重建时从头开始</label>
-                <button class="btn btn-danger" onclick="clearSemanticIndex()">删除向量索引</button>
-                <button class="btn btn-secondary" onclick="rebuildSemanticIndex()">重建向量索引</button>
-            </div>
-            <div id="semantic-status" class="result-area" style="margin-top:12px;"></div>
 
-            <div class="form-grid" style="margin-top:16px;">
-                <div class="form-group" style="grid-column: span 2;">
-                    <label>语义检索 query</label>
-                    <input type="text" id="semantic-query" placeholder="输入语义问题，如：上周谁提到服务器不稳定">
-                </div>
-                <div class="form-group">
-                    <label>chat (可选)</label>
-                    <input type="text" id="semantic-chat" placeholder="wxid 或 群ID">
-                </div>
-                <div class="form-group">
-                    <label>检索 topN</label>
-                    <input type="number" id="semantic-limit" value="20" min="1" max="200">
-                </div>
-                <div class="form-group">
-                    <label>统计时间窗</label>
-                    <select id="semantic-window">
-                        <option value="today">今天</option>
-                        <option value="7d">近七天</option>
-                        <option value="30d">近1月</option>
-                        <option value="all">全部</option>
-                    </select>
+                <div class="semantic-side-panel">
+                    <div class="form-group">
+                        <label>时间窗</label>
+                        <select id="semantic-window">
+                            <option value="today">今天</option>
+                            <option value="7d" selected>近七天</option>
+                            <option value="30d">近1月</option>
+                            <option value="all">全部</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-top:12px;">
+                        <label>最近会话数量</label>
+                        <input type="number" id="semantic-source-limit" value="50" min="1" max="500" onchange="loadSemanticSourceSessions()">
+                    </div>
+                    <div class="form-group" style="margin-top:12px;">
+                        <label>指定单个 chat（可选）</label>
+                        <input type="text" id="semantic-chat" placeholder="wxid / 群ID；填写后覆盖下方选择">
+                    </div>
+                    <div class="form-group" style="margin-top:12px;">
+                        <label>最近会话数据源</label>
+                        <div class="text-sm text-gray">不勾选时使用最近会话数量内的全部会话；勾选后只检索选中会话。</div>
+                        <div id="semantic-source-list" class="semantic-source-list"><div class="text-gray text-sm">加载中...</div></div>
+                    </div>
+                    <div class="form-group" style="margin-top:12px;">
+                        <label>检索 TopN</label>
+                        <input type="number" id="semantic-limit" value="8" min="1" max="200">
+                    </div>
+                    <div class="actions" style="margin-top:12px;padding-top:12px;">
+                        <button class="btn btn-secondary btn-sm" onclick="loadSemanticSourceSessions()">刷新会话</button>
+                    </div>
                 </div>
             </div>
-            <div class="actions">
-                <button class="btn btn-primary" id="semantic-search-btn" onclick="runSemanticSearch()">语义搜索</button>
-                <button class="btn btn-secondary" id="semantic-qa-btn" onclick="runSemanticQA()">会话问答</button>
-                <button class="btn btn-secondary" id="semantic-topics-btn" onclick="runSemanticTopics()">主题趋势</button>
-                <button class="btn btn-secondary" id="semantic-profiles-btn" onclick="runSemanticProfiles()">联系人画像</button>
-            </div>
-            <div id="semantic-result" class="result-area hidden" style="margin-top:12px;"></div>
+            <details class="semantic-manager">
+                <summary>配置与索引管理</summary>
+                <p class="text-sm text-gray" style="margin-top:10px;">模型参数双击灰色字段可编辑，修改后自动保存。删除索引会清空本地向量库；重建支持断点续传，勾选“从头开始”会清空后重建。</p>
+                <div class="semantic-config-grid">
+                    <div class="semantic-config-card wide">
+                        <h4>连接配置</h4>
+                        <div class="semantic-config-compact">
+                            <div class="form-group">
+                                <label>GLM API Key</label>
+                                <input type="text" id="semantic-api-key" class="semantic-cfg" placeholder="填写 BigModel API Key" data-dirty="false">
+                                <div id="semantic-api-key-state" class="text-sm text-gray" style="margin-top:4px;">未保存 API Key</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Base URL</label>
+                                <input type="text" id="semantic-base-url" class="semantic-cfg" placeholder="https://open.bigmodel.cn/api/paas/v4">
+                                <div class="text-sm text-gray">通常保持默认；网关/代理场景下修改。</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="semantic-config-card">
+                        <h4>模型</h4>
+                        <div class="form-group"><label>Embedding Model</label><input type="text" id="semantic-embedding-model" class="semantic-cfg" value="embedding-3"><div class="text-sm text-gray">用于消息向量化。</div></div>
+                        <div class="form-group"><label>Rerank Model</label><input type="text" id="semantic-rerank-model" class="semantic-cfg" value="rerank"><div class="text-sm text-gray">用于召回结果二次精排。</div></div>
+                        <div class="form-group"><label>Chat Model</label><input type="text" id="semantic-chat-model" class="semantic-cfg" value="glm-5.1"><div class="text-sm text-gray">用于基于证据生成回答。</div></div>
+                    </div>
+
+                    <div class="semantic-config-card">
+                        <h4>回答生成</h4>
+                        <div class="form-group"><label>Chat Max Tokens</label><input type="number" id="semantic-chat-max-tokens" class="semantic-cfg" value="4096" min="256" max="32768"><div class="text-sm text-gray">最大输出长度，越大越慢、成本越高。</div></div>
+                        <div class="form-group"><label>Chat Temperature</label><input type="number" id="semantic-chat-temperature" class="semantic-cfg" value="0.3" min="0.01" max="2" step="0.01"><div class="text-sm text-gray">回答发散度，问答建议 0.2-0.5。</div></div>
+                        <div class="form-group"><label><input type="checkbox" id="semantic-chat-thinking" class="semantic-cfg"> GLM-5.1 Thinking</label><div class="text-sm text-gray">复杂问题更稳，但响应更慢。</div></div>
+                    </div>
+
+                    <div class="semantic-config-card">
+                        <h4>检索参数</h4>
+                        <div class="semantic-config-compact">
+                            <div class="form-group"><label>召回 TopK</label><input type="number" id="semantic-recall-k" class="semantic-cfg" value="80" min="5" max="1000"></div>
+                            <div class="form-group"><label>返回 TopN</label><input type="number" id="semantic-top-n" class="semantic-cfg" value="20" min="1" max="200"></div>
+                            <div class="form-group"><label>相似度阈值</label><input type="number" id="semantic-threshold" class="semantic-cfg" value="0.55" min="0.01" max="1" step="0.01"></div>
+                        </div>
+                        <div class="text-sm text-gray">TopK 是初筛候选数；TopN 是最终返回数；阈值越高结果越严格。</div>
+                    </div>
+
+                    <div class="semantic-config-card">
+                        <h4>索引参数</h4>
+                        <div class="semantic-config-compact">
+                            <div class="form-group"><label>向量维度</label><input type="number" id="semantic-embedding-dim" class="semantic-cfg" value="2048" min="256" max="2048"></div>
+                            <div class="form-group"><label>并发线程数</label><input type="number" id="semantic-index-workers" class="semantic-cfg" value="4" min="1" max="32"></div>
+                        </div>
+                        <div class="text-sm text-gray">维度变更后需要重建索引；线程数越大构建越快但资源占用更高。</div>
+                    </div>
+
+                    <div class="semantic-config-card wide">
+                        <h4>固定能力</h4>
+                        <div class="semantic-fixed-flags">
+                            <label><input type="checkbox" id="semantic-enabled" checked disabled> 语义能力</label>
+                            <label><input type="checkbox" id="semantic-enable-rerank" checked disabled> 重排序</label>
+                            <label><input type="checkbox" id="semantic-enable-push" checked disabled> 语义推送</label>
+                            <label><input type="checkbox" id="semantic-realtime-index" checked disabled> 实时增量索引</label>
+                            <label><input type="checkbox" id="semantic-enable-qa" checked disabled> 会话问答</label>
+                            <label><input type="checkbox" id="semantic-enable-topics" checked disabled> 主题趋势</label>
+                            <label><input type="checkbox" id="semantic-enable-profiles" checked disabled> 联系人画像</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-secondary" onclick="testSemanticConfig()">测试连通性</button>
+                    <button class="btn btn-secondary" onclick="loadSemanticConfigAndStatus(true)">刷新状态</button>
+                    <label class="text-sm" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="semantic-rebuild-reset"> 重建时从头开始</label>
+                    <button class="btn btn-danger" onclick="clearSemanticIndex()">删除向量索引</button>
+                    <button class="btn btn-secondary" onclick="rebuildSemanticIndex()">重建向量索引</button>
+                </div>
+                <div id="semantic-status" class="result-area" style="margin-top:12px;"></div>
+                <div class="actions">
+                    <button class="btn btn-secondary" id="semantic-topics-btn" onclick="runSemanticTopics()">主题趋势</button>
+                    <button class="btn btn-secondary" id="semantic-profiles-btn" onclick="runSemanticProfiles()">联系人画像</button>
+                </div>
+                <div id="semantic-result" class="result-area hidden" style="margin-top:12px;"></div>
+            </details>
         </div>
 
         <div id="hook" class="tab-content">
@@ -1297,6 +1545,14 @@
         let hermesWeixinEditable = false;
         let hermesQQEditable = false;
         let semanticConnectivityPassed = false;
+        let semanticSaveTimer = null;
+        let semanticSavePending = false;
+        let semanticQAHistory = [];
+        let semanticQAHistoryChat = '';
+        let semanticRecentSessions = [];
+        let semanticActiveAnswerId = '';
+        let semanticActiveMetaId = '';
+        let semanticActiveEvidenceId = '';
         let dashboardSessions = [];
         const dashboardCharts = {};
         const dashboardMsgTypeMap = {
@@ -1319,6 +1575,8 @@
             loadDashboardAnalytics();
             loadHookPanel();
             loadSemanticConfigAndStatus();
+            loadSemanticSourceSessions();
+            bindSemanticComposer();
             connectHookStream();
             syncHookFormState();
             hookStatusTimer = setInterval(() => {
@@ -1358,6 +1616,7 @@
             }
             if (tabId === 'experimental') {
                 loadSemanticConfigAndStatus();
+                loadSemanticSourceSessions();
             }
         }
 
@@ -2285,6 +2544,19 @@
             document.getElementById(`view-${view}`).classList.add('active');
         }
 
+        async function runLimited(items, limit, worker) {
+            const list = Array.isArray(items) ? items : [];
+            const concurrency = Math.max(1, Number(limit || 1));
+            let cursor = 0;
+            const runners = Array.from({ length: Math.min(concurrency, list.length) }, async () => {
+                while (cursor < list.length) {
+                    const item = list[cursor++];
+                    await worker(item);
+                }
+            });
+            await Promise.all(runners);
+        }
+
         // Load DB List
         async function loadDBList() {
             const container = document.getElementById('db-list-container');
@@ -2313,17 +2585,17 @@
                 for (const [group, files] of entries) {
                     files.forEach(file => {
                         const key = `${group}::${file}`;
-                        probes.push((async () => {
+                        probes.push({ group, file, key });
+                    });
+                }
+                await runLimited(probes, 6, async ({ group, file, key }) => {
                             try {
                                 const r = await fetch(`/api/v1/db/tables?group=${encodeURIComponent(group)}&file=${encodeURIComponent(file)}`);
                                 statusMap[key] = r.ok;
                             } catch (_) {
                                 statusMap[key] = false;
                             }
-                        })());
-                    });
-                }
-                await Promise.all(probes);
+                });
 
                 for (const [group, files] of entries) {
                     html += `
@@ -2478,7 +2750,11 @@
                 base_url: document.getElementById('semantic-base-url').value.trim(),
                 embedding_model: document.getElementById('semantic-embedding-model').value.trim(),
                 rerank_model: document.getElementById('semantic-rerank-model').value.trim(),
-                embedding_dimension: parseInt(document.getElementById('semantic-embedding-dim').value, 10) || 512,
+                chat_model: document.getElementById('semantic-chat-model').value.trim(),
+                chat_thinking: !!document.getElementById('semantic-chat-thinking').checked,
+                chat_max_tokens: parseInt(document.getElementById('semantic-chat-max-tokens').value, 10) || 4096,
+                chat_temperature: parseFloat(document.getElementById('semantic-chat-temperature').value) || 0.3,
+                embedding_dimension: parseInt(document.getElementById('semantic-embedding-dim').value, 10) || 2048,
                 enable_rerank: true,
                 enable_semantic_push: true,
                 enable_qa: true,
@@ -2490,6 +2766,83 @@
                 top_n: parseInt(document.getElementById('semantic-top-n').value, 10) || 20,
                 similarity_threshold: parseFloat(document.getElementById('semantic-threshold').value) || 0.55
             };
+        }
+
+        function bindSemanticComposer() {
+            const input = document.getElementById('semantic-query');
+            if (!input || input.dataset.bound === 'true') return;
+            input.dataset.bound = 'true';
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    runSemanticQA();
+                }
+            });
+        }
+
+        async function loadSemanticSourceSessions() {
+            const box = document.getElementById('semantic-source-list');
+            if (!box) return;
+            const limit = parseInt(document.getElementById('semantic-source-limit')?.value || '50', 10) || 50;
+            box.innerHTML = '<div class="text-gray text-sm">加载中...</div>';
+            try {
+                const res = await fetch(`/api/v1/sessions?limit=${Math.min(Math.max(limit, 1), 500)}&format=json`);
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                semanticRecentSessions = Array.isArray(data.sessions) ? data.sessions : [];
+                renderSemanticSourceSessions();
+            } catch (e) {
+                box.innerHTML = `<div class="text-danger text-sm">会话加载失败: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function renderSemanticSourceSessions() {
+            const box = document.getElementById('semantic-source-list');
+            if (!box) return;
+            if (!semanticRecentSessions.length) {
+                box.innerHTML = '<div class="text-gray text-sm">暂无最近会话</div>';
+                return;
+            }
+            box.innerHTML = semanticRecentSessions.map((item, idx) => {
+                const username = String(item.username || '');
+                const label = String(item.chat || username || '未知会话');
+                const summary = String(item.summary || '').slice(0, 48);
+                return `
+                    <label class="semantic-source-item">
+                        <input type="checkbox" class="semantic-source-check" value="${escapeHtml(username)}">
+                        <span>
+                            <strong>${escapeHtml(label)}</strong>
+                            <div class="text-gray">${escapeHtml(item.time || '')} · ${escapeHtml(item.chat_type || '')} · #${idx + 1}</div>
+                            ${summary ? `<div class="text-gray">${escapeHtml(summary)}</div>` : ''}
+                        </span>
+                    </label>
+                `;
+            }).join('');
+        }
+
+        function collectSemanticSource() {
+            const chat = document.getElementById('semantic-chat')?.value.trim() || '';
+            const selected = Array.from(document.querySelectorAll('.semantic-source-check:checked'))
+                .map(el => String(el.value || '').trim())
+                .filter(Boolean);
+            return {
+                chat,
+                chats: chat ? [] : selected,
+                source_limit: parseInt(document.getElementById('semantic-source-limit')?.value || '50', 10) || 50,
+                window: document.getElementById('semantic-window')?.value || 'all'
+            };
+        }
+
+        function appendSemanticMessage(role, html) {
+            const thread = document.getElementById('semantic-chat-thread');
+            if (!thread) return null;
+            const id = `semantic-msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const msg = document.createElement('div');
+            msg.className = `semantic-message ${role}`;
+            msg.innerHTML = `<div class="semantic-bubble" id="${id}">${html}</div>`;
+            thread.appendChild(msg);
+            thread.scrollTop = thread.scrollHeight;
+            return id;
         }
 
         function applySemanticConfig(cfg) {
@@ -2505,7 +2858,11 @@
             document.getElementById('semantic-base-url').value = data.base_url || 'https://open.bigmodel.cn/api/paas/v4';
             document.getElementById('semantic-embedding-model').value = data.embedding_model || 'embedding-3';
             document.getElementById('semantic-rerank-model').value = data.rerank_model || 'rerank';
-            document.getElementById('semantic-embedding-dim').value = data.embedding_dimension || 512;
+            document.getElementById('semantic-chat-model').value = data.chat_model || 'glm-5.1';
+            document.getElementById('semantic-chat-thinking').checked = !!data.chat_thinking;
+            document.getElementById('semantic-chat-max-tokens').value = data.chat_max_tokens || 4096;
+            document.getElementById('semantic-chat-temperature').value = data.chat_temperature || 0.3;
+            document.getElementById('semantic-embedding-dim').value = data.embedding_dimension || 2048;
             document.getElementById('semantic-enable-rerank').checked = true;
             document.getElementById('semantic-enable-push').checked = true;
             document.getElementById('semantic-enable-qa').checked = true;
@@ -2516,15 +2873,21 @@
             document.getElementById('semantic-recall-k').value = data.recall_k || 80;
             document.getElementById('semantic-top-n').value = data.top_n || 20;
             document.getElementById('semantic-threshold').value = data.similarity_threshold || 0.55;
+            // reset all config fields to display mode
+            document.querySelectorAll('.semantic-cfg').forEach(el => {
+                el.dataset.dirty = 'false';
+                exitEditMode(el);
+            });
         }
 
-        async function loadSemanticConfigAndStatus() {
+        async function loadSemanticConfigAndStatus(force = false) {
             try {
                 const [cfgRes, statusRes] = await Promise.all([
                     fetch('/api/v1/semantic/config?format=json'),
                     fetch('/api/v1/semantic/index/status?format=json')
                 ]);
-                if (cfgRes.ok) {
+                const hasEditing = document.querySelector('.semantic-cfg.editing');
+                if (cfgRes.ok && (force || !hasEditing)) {
                     applySemanticConfig(await cfgRes.json());
                 }
                 if (statusRes.ok) {
@@ -2539,7 +2902,12 @@
             const box = document.getElementById('semantic-status');
             if (!box) return;
             const st = status || {};
-            const indexReady = !!st.enabled && !st.running && (st.indexed_count || 0) > 0 && (st.pending || 0) === 0 && (st.failed || 0) === 0;
+            const indexReady = !!st.enabled && !st.running && (st.indexed_count || 0) > 0 && (st.pending || 0) === 0;
+            const processed = Number(st.processed || 0);
+            const failed = Number(st.failed || 0);
+            const pending = Number(st.pending || 0);
+            const total = Number(st.total || 0);
+            const finished = processed + failed;
             setSemanticActionEnabled(indexReady);
             box.classList.remove('hidden');
             const okBadge = semanticConnectivityPassed
@@ -2554,17 +2922,20 @@
                     ${okBadge}
                 </div>
                 <div class="text-sm" style="margin-bottom:6px;">${indexBadge}</div>
-                <div class="text-sm">ready: ${!!st.ready} | enabled: ${!!st.enabled} | running: ${!!st.running}</div>
-                <div class="text-sm">indexed_count: ${st.indexed_count || 0}</div>
-                <div class="text-sm">progress: success ${st.processed || 0} / total ${st.total || 0} | failed ${st.failed || 0} | pending ${st.pending || 0} | ${Number(st.progress_pct || 0).toFixed(2)}%</div>
-                <div class="text-sm">mode: ${escapeHtml(st.mode || '-')} | updated_at: ${escapeHtml(st.updated_at || '-')}</div>
-                <div class="text-sm">last_incremental: ${escapeHtml(st.last_incremental_at || '-')} | added ${Number(st.last_incremental_added || 0)}</div>
-                <div class="text-sm">last_rerank: ${escapeHtml(st.last_rerank_at || '-')} | applied ${st.last_rerank_applied ? 'true' : 'false'}</div>
-                <div class="text-sm">store_path: <code>${escapeHtml(st.store_path || '-')}</code></div>
-                ${st.last_error ? `<div class="text-danger text-sm">last_error: ${escapeHtml(st.last_error)}</div>` : ''}
-                ${st.last_incremental_error ? `<div class="text-danger text-sm">last_incremental_error: ${escapeHtml(st.last_incremental_error)}</div>` : ''}
-                ${st.last_rerank_error ? `<div class="text-danger text-sm">last_rerank_error: ${escapeHtml(st.last_rerank_error)}</div>` : ''}
-                ${st.error ? `<div class="text-danger text-sm">error: ${escapeHtml(st.error)}</div>` : ''}
+                <div class="text-sm">能力状态: ${st.enabled ? '已开启' : '未开启'} | 构建任务: ${st.running ? '运行中' : '空闲'} | 存储可用: ${st.ready ? '是' : '否'}</div>
+                <div class="text-sm">已索引消息: ${Number(st.indexed_count || 0)}</div>
+                <div class="text-sm">索引覆盖会话: ${Number(st.indexed_talkers || 0)} / ${Number(st.known_talkers || 0)} | 未覆盖 ${Number(st.unindexed_talkers || 0)} | 最近索引消息: ${escapeHtml(st.last_indexed_message_at || '-')}</div>
+                <div class="text-sm">本次任务进度: 已完成 ${finished} / 总计 ${total} | 成功 ${processed} | 失败 ${failed} | 待处理 ${pending} | ${Number(st.progress_pct || 0).toFixed(2)}%</div>
+                <div class="text-sm">任务模式: ${escapeHtml(st.mode || '-')} | 更新时间: ${escapeHtml(st.updated_at || '-')}</div>
+                <div class="text-sm">增量更新: ${escapeHtml(st.last_incremental_at || '-')} | 新增索引 ${Number(st.last_incremental_added || 0)}</div>
+                <div class="text-sm">重排序: ${escapeHtml(st.last_rerank_at || '-')} | 最近是否应用 ${st.last_rerank_applied ? '是' : '否'}</div>
+                <div class="text-sm">当前处理: ${escapeHtml(st.current_talker || '-')}</div>
+                ${Array.isArray(st.failed_talkers) && st.failed_talkers.length ? `<div class="text-danger text-sm">失败会话: ${escapeHtml(st.failed_talkers.slice(0, 12).join(' ｜ '))}${st.failed_talkers.length > 12 ? ' ...' : ''}</div>` : ''}
+                <div class="text-sm">索引库: <code>${escapeHtml(st.store_path || '-')}</code></div>
+                ${st.last_error ? `<div class="text-danger text-sm">最近任务错误: ${escapeHtml(st.last_error)}</div>` : ''}
+                ${st.last_incremental_error ? `<div class="text-danger text-sm">最近增量错误: ${escapeHtml(st.last_incremental_error)}</div>` : ''}
+                ${st.last_rerank_error ? `<div class="text-danger text-sm">最近重排序错误: ${escapeHtml(st.last_rerank_error)}</div>` : ''}
+                ${st.error ? `<div class="text-danger text-sm">错误: ${escapeHtml(st.error)}</div>` : ''}
             `;
         }
 
@@ -2600,12 +2971,10 @@
             }
         }
 
-        async function saveSemanticConfig() {
+        async function doAutoSave() {
+            if (semanticSavePending) return;
+            semanticSavePending = true;
             const payload = collectSemanticPayload();
-            if (payload.enabled && !semanticConnectivityPassed) {
-                alert('请先完成 GLM 连通性测试并通过，再启用语义能力。');
-                return;
-            }
             try {
                 const res = await fetch('/api/v1/semantic/config?format=json', {
                     method: 'POST',
@@ -2613,12 +2982,92 @@
                     body: JSON.stringify(payload)
                 });
                 if (!res.ok) throw new Error(await res.text());
-                alert('语义配置已保存');
-                await loadSemanticConfigAndStatus();
+                markAllSaved();
+                await loadSemanticConfigAndStatus(true);
             } catch (e) {
-                alert(`保存失败: ${e.message}`);
+                markSaveFailed();
+                console.error('auto-save semantic config failed:', e);
+            } finally {
+                semanticSavePending = false;
             }
         }
+
+        function scheduleAutoSave() {
+            if (semanticSaveTimer) clearTimeout(semanticSaveTimer);
+            semanticSaveTimer = setTimeout(doAutoSave, 800);
+        }
+
+        function enterEditMode(el) {
+            if (!el || el.classList.contains('editing')) return;
+            el.classList.add('editing');
+            el.classList.remove('saving');
+            el.dataset.dirty = 'false';
+            if (el.type === 'text' || el.type === 'number') {
+                el.readOnly = false;
+                el.focus();
+                el.select();
+            }
+        }
+
+        function exitEditMode(el) {
+            if (!el) return;
+            el.classList.remove('editing', 'saving');
+            if (el.type === 'text' || el.type === 'number') {
+                el.readOnly = true;
+            }
+        }
+
+        function markAllSaved() {
+            document.querySelectorAll('.semantic-cfg').forEach(el => {
+                el.dataset.dirty = 'false';
+                el.classList.add('saving');
+                setTimeout(() => el.classList.remove('saving'), 600);
+                exitEditMode(el);
+            });
+        }
+
+        function markSaveFailed() {
+            document.querySelectorAll('.semantic-cfg.editing').forEach(el => {
+                el.style.borderColor = 'var(--danger)';
+                setTimeout(() => { el.style.borderColor = ''; }, 1200);
+            });
+        }
+
+        function initSemanticCfgFields() {
+            document.querySelectorAll('.semantic-cfg').forEach(el => {
+                el.dataset.dirty = 'false';
+                if (el.type === 'text' || el.type === 'number') {
+                    el.readOnly = true;
+                }
+                el.addEventListener('dblclick', () => enterEditMode(el));
+                el.addEventListener('input', () => {
+                    el.dataset.dirty = 'true';
+                    scheduleAutoSave();
+                });
+                el.addEventListener('change', () => {
+                    el.dataset.dirty = 'true';
+                    scheduleAutoSave();
+                });
+                el.addEventListener('blur', () => {
+                    if (el.dataset.dirty === 'true') {
+                        if (semanticSaveTimer) { clearTimeout(semanticSaveTimer); semanticSaveTimer = null; }
+                        doAutoSave();
+                    } else {
+                        exitEditMode(el);
+                    }
+                });
+                el.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        el.dataset.dirty = 'false';
+                        exitEditMode(el);
+                        el.blur();
+                    }
+                });
+            });
+        }
+
+        // call on page load
+        initSemanticCfgFields();
 
         async function rebuildSemanticIndex() {
             if (!confirm('确认执行重建向量索引？未勾选“从头开始”时将按断点续传继续。')) return;
@@ -2628,7 +3077,8 @@
                 if (!res.ok) throw new Error(await res.text());
                 const data = await res.json();
                 renderSemanticStatus(data.status || {});
-                alert('向量索引重建完成');
+                alert(data.accepted ? '向量索引重建任务已启动，请查看状态进度' : '向量索引重建完成');
+                await loadSemanticConfigAndStatus();
             } catch (e) {
                 alert(`重建失败: ${e.message}`);
             }
@@ -2649,41 +3099,189 @@
 
         async function runSemanticSearch() {
             const query = document.getElementById('semantic-query').value.trim();
-            const chat = document.getElementById('semantic-chat').value.trim();
             const limit = parseInt(document.getElementById('semantic-limit').value, 10) || 20;
             if (!query) {
                 alert('请输入 query');
                 return;
             }
-            const params = new URLSearchParams({ query, limit: String(limit), rerank: '1' });
-            if (chat) params.set('chat', chat);
+            const source = collectSemanticSource();
+            const params = new URLSearchParams({ query, limit: String(limit), rerank: '1', window: source.window, source_limit: String(source.source_limit) });
+            if (source.chat) params.set('chat', source.chat);
+            if (source.chats.length) params.set('chats', source.chats.join(','));
             params.set('format', 'json');
             await runSemanticAPI(`/api/v1/semantic/search?${params.toString()}`);
         }
 
         async function runSemanticQA() {
-            const query = document.getElementById('semantic-query').value.trim();
-            const chat = document.getElementById('semantic-chat').value.trim();
+            const input = document.getElementById('semantic-query');
+            const query = input.value.trim();
+            const source = collectSemanticSource();
             const limit = parseInt(document.getElementById('semantic-limit').value, 10) || 8;
             if (!query) {
                 alert('请输入 query');
                 return;
             }
-            const box = document.getElementById('semantic-result');
-            box.classList.remove('hidden');
-            box.innerHTML = '<div class="loading">处理中...</div>';
+            const sourceKey = `${source.chat}|${source.chats.join(',')}|${source.window}|${source.source_limit}`;
+            if (semanticQAHistoryChat !== sourceKey) {
+                semanticQAHistory = [];
+                semanticQAHistoryChat = sourceKey;
+            }
+            appendSemanticMessage('user', escapeHtml(query));
+            input.value = '';
+            const streamId = `semantic-stream-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const messageId = appendSemanticMessage('assistant', `
+                <div class="text-sm text-gray" id="${streamId}-meta">正在按最近会话和时间窗检索证据...</div>
+                <div id="${streamId}-answer"><span class="typing-cursor">▌</span></div>
+                <div id="${streamId}-evidence"></div>
+            `);
+            semanticActiveMetaId = `${streamId}-meta`;
+            semanticActiveAnswerId = `${streamId}-answer`;
+            semanticActiveEvidenceId = `${streamId}-evidence`;
             try {
-                const res = await fetch('/api/v1/semantic/qa?format=json', {
+                const res = await fetch('/api/v1/semantic/qa/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, chat, top_n: limit })
+                    body: JSON.stringify({
+                        query,
+                        chat: source.chat,
+                        chats: source.chats,
+                        window: source.window,
+                        source_limit: source.source_limit,
+                        top_n: limit,
+                        history: semanticQAHistory.slice(-6)
+                    })
                 });
                 if (!res.ok) throw new Error(await res.text());
-                const data = await res.json();
-                box.innerHTML = `<pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+                const doneData = await readSemanticQAStream(res);
+                if (doneData && doneData.answer) {
+                    semanticQAHistory.push({ role: 'user', content: query });
+                    semanticQAHistory.push({ role: 'assistant', content: String(doneData.answer || '').slice(0, 2000) });
+                    if (semanticQAHistory.length > 12) semanticQAHistory = semanticQAHistory.slice(-12);
+                }
             } catch (e) {
-                box.innerHTML = `<div class="text-danger">失败: ${escapeHtml(e.message)}</div>`;
+                const target = messageId ? document.getElementById(messageId) : null;
+                if (target) target.innerHTML = `<div class="text-danger">失败: ${escapeHtml(e.message)}</div>`;
             }
+        }
+
+        function clearSemanticQAHistory() {
+            semanticQAHistory = [];
+            semanticQAHistoryChat = '';
+            const thread = document.getElementById('semantic-chat-thread');
+            if (thread) {
+                thread.innerHTML = '<div class="semantic-message assistant"><div class="semantic-bubble">对话已清空。继续提问时会重新按当前数据源检索。</div></div>';
+            }
+        }
+
+        async function readSemanticQAStream(res) {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let answer = '';
+            let doneData = null;
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const parts = buffer.split('\n\n');
+                buffer = parts.pop() || '';
+                for (const part of parts) {
+                    const payload = handleSemanticQAStreamEvent(part, (delta) => {
+                        answer += delta;
+                        renderTypingAnswer(answer, true);
+                    });
+                    if (payload && payload.event === 'done') doneData = payload.data;
+                }
+            }
+            if (buffer.trim()) {
+                const payload = handleSemanticQAStreamEvent(buffer, (delta) => {
+                    answer += delta;
+                    renderTypingAnswer(answer, true);
+                });
+                if (payload && payload.event === 'done') doneData = payload.data;
+            }
+            renderTypingAnswer(answer, false);
+            return doneData;
+        }
+
+        function handleSemanticQAStreamEvent(raw, onDelta) {
+            const lines = String(raw || '').split('\n');
+            let event = 'message';
+            const dataLines = [];
+            lines.forEach((line) => {
+                if (line.startsWith('event:')) event = line.slice(6).trim();
+                if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+            });
+            if (!dataLines.length) return;
+            const payload = JSON.parse(dataLines.join('\n'));
+            if (event === 'delta') {
+                if (payload.text && onDelta) onDelta(String(payload.text));
+                return { event, data: payload };
+            }
+            if (event === 'done') {
+                renderSemanticQAStreamDone(payload);
+                return { event, data: payload };
+            }
+            if (event === 'error') {
+                throw new Error(payload.error || 'stream error');
+            }
+            return { event, data: payload };
+        }
+
+        function renderTypingAnswer(answer, typing) {
+            const el = document.getElementById(semanticActiveAnswerId || 'semantic-qa-stream-answer');
+            if (!el) return;
+            el.innerHTML = `${escapeHtml(answer || '')}${typing ? '<span class="typing-cursor">▌</span>' : ''}`;
+            const thread = document.getElementById('semantic-chat-thread');
+            if (thread) thread.scrollTop = thread.scrollHeight;
+        }
+
+        function renderSemanticQAStreamDone(data) {
+            renderTypingAnswer(data.answer || '', false);
+            const meta = document.getElementById(semanticActiveMetaId || 'semantic-qa-stream-meta');
+            if (meta) {
+                const dbg = data.debug || {};
+                const debugText = dbg.intent
+                    ? ` | intent=${escapeHtml(dbg.intent)} | mode=${escapeHtml(dbg.answer_mode || '-')} | route=${escapeHtml(dbg.source || '-')}/${escapeHtml(dbg.retrieval || '-')}${dbg.entity ? ` | entity=${escapeHtml(dbg.entity)}` : ''}${dbg.topic ? ` | topic=${escapeHtml(dbg.topic)}` : ''}${dbg.entity_candidate_count ? ` | candidates=${Number(dbg.entity_candidate_count || 0)}${dbg.entity_ambiguous ? '(歧义)' : ''}` : ''}${dbg.empty_reason ? ` | reason=${escapeHtml(dbg.empty_reason)}` : ''}`
+                    : '';
+                meta.innerHTML = `数据源会话: ${Number(data.source_count || 0)} | 时间窗: ${escapeHtml(data.window || 'all')} | 证据数: ${Number(data.count || 0)} | rerank: ${data.rerank_applied ? '已应用' : (data.rerank_tried ? '未应用' : '未尝试')}${debugText}${data.rerank_error ? ` | <span class="text-danger">${escapeHtml(data.rerank_error)}</span>` : ''}`;
+            }
+            const target = document.getElementById(semanticActiveEvidenceId || 'semantic-qa-stream-evidence');
+            if (!target) return;
+            const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+            const dbg = data.debug || {};
+            const candidateRows = Array.isArray(dbg.entity_candidates) && dbg.entity_candidates.length
+                ? `<div style="margin-top:10px;padding:8px;border:1px solid #fde68a;background:#fffbeb;border-radius:8px;" class="text-sm">
+                    <strong>实体候选${dbg.entity_ambiguous ? '（存在歧义）' : ''}</strong>
+                    ${dbg.entity_candidates.slice(0, 8).map(c => `<div>${escapeHtml(c.display || c.username || '')} · ${escapeHtml(c.kind || '')} · ${escapeHtml(c.source || '')} · ${escapeHtml(c.username || '')}</div>`).join('')}
+                </div>`
+                : '';
+            const rows = evidence.map((item, idx) => `
+                <tr>
+                    <td>[${idx + 1}]</td>
+                    <td>${escapeHtml(formatTimestamp(item.time))}</td>
+                    <td>${escapeHtml(item.talker_name || item.talker || '')}</td>
+                    <td>${escapeHtml(item.sender_name || item.sender || '')}</td>
+                    <td>
+                        <div>${escapeHtml(item.content || '')}</div>
+                        ${renderEvidenceContext(item.context)}
+                    </td>
+                </tr>
+            `).join('');
+            target.innerHTML = `
+                ${candidateRows}
+                <div class="table-scroll" style="margin-top:12px;">
+                    <table><thead><tr><th>#</th><th>时间</th><th>会话</th><th>发送者</th><th>证据内容</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="text-gray">暂无证据</td></tr>'}</tbody></table>
+                </div>
+            `;
+        }
+
+        function renderEvidenceContext(context) {
+            if (!Array.isArray(context) || !context.length) return '';
+            const items = context.slice(0, 6).map((row) => (
+                `<div class="text-sm text-gray" style="margin-top:4px;">上下文 ${escapeHtml(formatTimestamp(row.time))} ${escapeHtml(row.sender_name || row.sender || '')}: ${escapeHtml(row.content || '')}</div>`
+            )).join('');
+            return `<div style="margin-top:8px;">${items}</div>`;
         }
 
         async function runSemanticTopics() {
@@ -2733,6 +3331,29 @@
             box.innerHTML = `<div class="result-header"><span class="url-display">${escapeHtml(url)}</span></div><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
         }
 
+        function renderSemanticQAResult(url, data) {
+            const box = document.getElementById('semantic-result');
+            const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+            const rows = evidence.map((item, idx) => `
+                <tr>
+                    <td>[${idx + 1}]</td>
+                    <td>${escapeHtml(formatTimestamp(item.time))}</td>
+                    <td>${escapeHtml(item.talker_name || item.talker || '')}</td>
+                    <td>${escapeHtml(item.sender_name || item.sender || '')}</td>
+                    <td>${escapeHtml(item.content || '')}</td>
+                </tr>
+            `).join('');
+            box.innerHTML = `
+                <div class="result-header"><span class="url-display">${escapeHtml(url)}</span></div>
+                <div class="text-sm">证据数: ${Number(data.count || 0)} | rerank: ${data.rerank_applied ? '已应用' : (data.rerank_tried ? '未应用' : '未尝试')}</div>
+                ${data.rerank_error ? `<div class="text-danger text-sm">rerank 错误: ${escapeHtml(data.rerank_error)}</div>` : ''}
+                <div style="white-space:pre-wrap;margin-top:10px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">${escapeHtml(data.answer || '')}</div>
+                <div class="table-scroll" style="margin-top:12px;">
+                    <table><thead><tr><th>#</th><th>时间</th><th>会话</th><th>发送者</th><th>证据内容</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="text-gray">暂无证据</td></tr>'}</tbody></table>
+                </div>
+            `;
+        }
+
         function renderSemanticTopicsResult(url, data) {
             const box = document.getElementById('semantic-result');
             const topics = Array.isArray(data.topics) ? data.topics : [];
@@ -2743,6 +3364,8 @@
             box.innerHTML = `
                 <div class="result-header"><span class="url-display">${escapeHtml(url)}</span></div>
                 <div class="text-sm">时间窗: ${escapeHtml(data.window_label || data.window || '')} | 消息数: ${Number(data.count || 0)} ${data.truncated ? '<span class="text-danger">(已截断)</span>' : ''}</div>
+                ${data.summary ? `<div style="white-space:pre-wrap;margin-top:10px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">${escapeHtml(data.summary)}</div>` : ''}
+                ${data.summary_error ? `<div class="text-danger text-sm" style="margin-top:8px;">LLM 摘要失败: ${escapeHtml(data.summary_error)}</div>` : ''}
                 <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px;">
                     <div id="semantic-topics-line" style="height:260px;border:1px solid #e5e7eb;border-radius:8px;"></div>
                     <div id="semantic-topics-bar" style="height:300px;border:1px solid #e5e7eb;border-radius:8px;"></div>
@@ -2785,6 +3408,8 @@
             box.innerHTML = `
                 <div class="result-header"><span class="url-display">${escapeHtml(url)}</span></div>
                 <div class="text-sm">时间窗: ${escapeHtml(data.window_label || data.window || '')} | 消息数: ${Number(data.count || 0)} ${data.truncated ? '<span class="text-danger">(已截断)</span>' : ''}</div>
+                ${data.summary ? `<div style="white-space:pre-wrap;margin-top:10px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;">${escapeHtml(data.summary)}</div>` : ''}
+                ${data.summary_error ? `<div class="text-danger text-sm" style="margin-top:8px;">LLM 摘要失败: ${escapeHtml(data.summary_error)}</div>` : ''}
                 <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px;">
                     <div id="semantic-profiles-bar" style="height:300px;border:1px solid #e5e7eb;border-radius:8px;"></div>
                     <div id="semantic-profiles-pie" style="height:300px;border:1px solid #e5e7eb;border-radius:8px;"></div>

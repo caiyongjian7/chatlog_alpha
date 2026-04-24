@@ -6,11 +6,14 @@ const (
 	DefaultGLMBaseURL        = "https://open.bigmodel.cn/api/paas/v4"
 	DefaultGLMEmbedding      = "embedding-3"
 	DefaultGLMRerank         = "rerank"
-	DefaultGLMEmbeddingDim   = 512
+	DefaultGLMChat           = "glm-5.1"
+	DefaultGLMEmbeddingDim   = 2048
 	DefaultSemanticRecallK   = 80
 	DefaultSemanticTopN      = 20
 	DefaultSemanticThreshold = 0.55
 	DefaultSemanticWorkers   = 4
+	DefaultSemanticMaxTokens = 4096
+	DefaultSemanticTemp      = 0.3
 )
 
 type SemanticConfig struct {
@@ -19,6 +22,10 @@ type SemanticConfig struct {
 	BaseURL             string  `mapstructure:"base_url" json:"base_url"`
 	EmbeddingModel      string  `mapstructure:"embedding_model" json:"embedding_model"`
 	RerankModel         string  `mapstructure:"rerank_model" json:"rerank_model"`
+	ChatModel           string  `mapstructure:"chat_model" json:"chat_model"`
+	ChatThinking        bool    `mapstructure:"chat_thinking" json:"chat_thinking"`
+	ChatMaxTokens       int     `mapstructure:"chat_max_tokens" json:"chat_max_tokens"`
+	ChatTemperature     float64 `mapstructure:"chat_temperature" json:"chat_temperature"`
 	EmbeddingDimension  int     `mapstructure:"embedding_dimension" json:"embedding_dimension"`
 	EnableRerank        bool    `mapstructure:"enable_rerank" json:"enable_rerank"`
 	EnableSemanticPush  bool    `mapstructure:"enable_semantic_push" json:"enable_semantic_push"`
@@ -45,6 +52,19 @@ func NormalizeSemanticConfig(in SemanticConfig) SemanticConfig {
 	out.RerankModel = strings.TrimSpace(out.RerankModel)
 	if out.RerankModel == "" {
 		out.RerankModel = DefaultGLMRerank
+	}
+	out.ChatModel = strings.TrimSpace(out.ChatModel)
+	if out.ChatModel == "" {
+		out.ChatModel = DefaultGLMChat
+	}
+	if out.ChatMaxTokens <= 0 {
+		out.ChatMaxTokens = DefaultSemanticMaxTokens
+	}
+	if out.ChatMaxTokens > 32768 {
+		out.ChatMaxTokens = 32768
+	}
+	if out.ChatTemperature <= 0 || out.ChatTemperature > 2 {
+		out.ChatTemperature = DefaultSemanticTemp
 	}
 	if out.EmbeddingDimension < 256 || out.EmbeddingDimension > 2048 {
 		out.EmbeddingDimension = DefaultGLMEmbeddingDim

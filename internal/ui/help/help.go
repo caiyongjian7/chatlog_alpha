@@ -35,7 +35,7 @@ const (
 
 [yellow]4. 启动 HTTP 服务[white]
    选择"启动 HTTP 服务"菜单项，启动 HTTP 和 MCP 服务。
-   启动后可以通过浏览器访问 http://localhost:5030 查看聊天记录。
+   启动后可以通过浏览器访问 http://localhost:5030 查看聊天记录、仪表盘、推送页面和实验性功能。
 
 [yellow]5. 设置选项[white]
    选择"设置"菜单项，可以配置:
@@ -46,9 +46,20 @@ const (
 • 会话列表(wx-cli): [yellow]GET http://localhost:5030/api/v1/sessions?limit=20[white]
 • 聊天记录(wx-cli): [yellow]GET http://localhost:5030/api/v1/history?chat=wxid_xxx&time=2023-01-01[white]
 • 搜索(wx-cli): [yellow]GET http://localhost:5030/api/v1/search?keyword=项目&chats=工作群[white]
+• 全局搜索: [yellow]GET http://localhost:5030/api/v1/db/search?keyword=项目&mode=deep[white]
 • 联系人列表(wx-cli): [yellow]GET http://localhost:5030/api/v1/contacts?limit=20[white]
 • 群聊列表(wx-cli): [yellow]GET http://localhost:5030/api/v1/chatrooms?limit=20[white]
 • 朋友圈动态(wx-cli): [yellow]GET http://localhost:5030/api/v1/sns_feed?limit=20[white]
+
+[green]前端页面:[white]
+• 仪表盘与数据库：私聊/群聊分析、数据库浏览、全局搜索
+• 推送页面：关键词推送、实时全部转发、指定联系人/群聊转发，支持 MCP、POST、Hermes Weixin、Hermes QQ
+• 实验性功能：GLM 语义检索与重排序、向量索引重建/删除、主题趋势、联系人画像
+
+[green]语义索引:[white]
+• API Key 不会在前端回显；保存配置前必须通过连通性测试
+• 向量索引保存在工作目录下的 .chatlog_semantic/vector_index.db
+• HTTP 服务启动后会自动执行一次增量索引，补齐离线期间新增的消息
 
 [green]MCP 集成:[white]
 Chatlog 支持 Model Context Protocol，可与支持 MCP 的 AI 助手集成。

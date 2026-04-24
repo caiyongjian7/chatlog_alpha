@@ -111,6 +111,16 @@ func (s *Store) Count() (int, error) {
 	return n, nil
 }
 
+func (s *Store) Coverage(model string, dim int) (int, int64, error) {
+	row := s.db.QueryRow(`SELECT COUNT(DISTINCT talker), COALESCE(MAX(ts), 0) FROM semantic_embeddings WHERE model=? AND dim=?`, model, dim)
+	var talkers int
+	var maxTS int64
+	if err := row.Scan(&talkers, &maxTS); err != nil {
+		return 0, 0, err
+	}
+	return talkers, maxTS, nil
+}
+
 func (s *Store) MaxSeq(talker, model string, dim int) (int64, error) {
 	row := s.db.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM semantic_embeddings WHERE talker=? AND model=? AND dim=?`, talker, model, dim)
 	var n int64
@@ -118,6 +128,24 @@ func (s *Store) MaxSeq(talker, model string, dim int) (int64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+func (s *Store) LoadContentHashes(talker, model string, dim int) (map[int64]string, error) {
+	rows, err := s.db.Query(`SELECT seq, content_hash FROM semantic_embeddings WHERE talker=? AND model=? AND dim=?`, talker, model, dim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]string{}
+	for rows.Next() {
+		var seq int64
+		var hash string
+		if err := rows.Scan(&seq, &hash); err != nil {
+			return nil, err
+		}
+		out[seq] = hash
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Upsert(records []record) error {
@@ -170,7 +198,25 @@ ON CONFLICT(talker, seq, model, dim) DO UPDATE SET
 	return tx.Commit()
 }
 
+func (s *Store) DeleteOne(talker string, seq int64, model string, dim int) error {
+	if strings.TrimSpace(talker) == "" || seq <= 0 || strings.TrimSpace(model) == "" || dim <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`DELETE FROM semantic_embeddings WHERE talker=? AND seq=? AND model=? AND dim=?`, talker, seq, model, dim)
+	return err
+}
+
 func (s *Store) LoadCandidates(talker, model string, dim, limit int) ([]record, error) {
+	var talkers []string
+	if strings.TrimSpace(talker) != "" {
+		talkers = []string{strings.TrimSpace(talker)}
+	}
+	return s.LoadCandidatesScoped(talkers, 0, 0, model, dim, limit)
+}
+
+func (s *Store) LoadCandidatesScoped(talkers []string, startTS, endTS int64, model string, dim, limit int) ([]record, error) {
 	if limit <= 0 {
 		limit = 5000
 	}
@@ -178,9 +224,20 @@ func (s *Store) LoadCandidates(talker, model string, dim, limit int) ([]record, 
 FROM semantic_embeddings
 WHERE model=? AND dim=?`
 	args := []any{model, dim}
-	if talker != "" {
-		query += ` AND talker=?`
-		args = append(args, talker)
+	talkers = normalizeTalkerScope(talkers)
+	if len(talkers) > 0 {
+		query += ` AND talker IN (` + placeholders(len(talkers)) + `)`
+		for _, talker := range talkers {
+			args = append(args, talker)
+		}
+	}
+	if startTS > 0 {
+		query += ` AND ts>=?`
+		args = append(args, startTS)
+	}
+	if endTS > 0 {
+		query += ` AND ts<=?`
+		args = append(args, endTS)
 	}
 	query += ` ORDER BY ts DESC LIMIT ?`
 	args = append(args, limit)
@@ -207,6 +264,162 @@ WHERE model=? AND dim=?`
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+// SearchByKeywords returns records whose content column contains any of the given
+// keywords (SQL LIKE %kw%). Results are deduplicated and limited to bound the
+// worst-case row count.
+func (s *Store) SearchByKeywords(talker, model string, dim int, keywords []string, limit int) ([]record, error) {
+	var talkers []string
+	if strings.TrimSpace(talker) != "" {
+		talkers = []string{strings.TrimSpace(talker)}
+	}
+	return s.SearchByKeywordsScoped(talkers, 0, 0, model, dim, keywords, limit)
+}
+
+func (s *Store) SearchByKeywordsScoped(talkers []string, startTS, endTS int64, model string, dim int, keywords []string, limit int) ([]record, error) {
+	if len(keywords) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	baseQuery := `SELECT talker, seq, sender, is_self, msg_type, msg_sub_type, ts, content, model, dim, vector_json
+	FROM semantic_embeddings
+	WHERE model=? AND dim=?`
+	args := []any{model, dim}
+	talkers = normalizeTalkerScope(talkers)
+	if len(talkers) > 0 {
+		baseQuery += ` AND talker IN (` + placeholders(len(talkers)) + `)`
+		for _, talker := range talkers {
+			args = append(args, talker)
+		}
+	}
+	if startTS > 0 {
+		baseQuery += ` AND ts>=?`
+		args = append(args, startTS)
+	}
+	if endTS > 0 {
+		baseQuery += ` AND ts<=?`
+		args = append(args, endTS)
+	}
+	var clauses []string
+	for _, kw := range keywords {
+		clauses = append(clauses, `content LIKE ?`)
+		args = append(args, `%`+kw+`%`)
+	}
+	baseQuery += ` AND (` + strings.Join(clauses, ` OR `) + `) ORDER BY ts DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(baseQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]record, 0, limit)
+	for rows.Next() {
+		var item record
+		var isSelf int
+		var vecRaw string
+		if err := rows.Scan(
+			&item.Talker, &item.Seq, &item.Sender, &isSelf, &item.Type, &item.SubType,
+			&item.TS, &item.Content, &item.Model, &item.Dim, &vecRaw,
+		); err != nil {
+			return nil, err
+		}
+		item.IsSelf = isSelf == 1
+		_ = json.Unmarshal([]byte(vecRaw), &item.Vector)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func normalizeTalkerScope(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, item := range in {
+		talker := strings.TrimSpace(item)
+		if talker == "" {
+			continue
+		}
+		if _, ok := seen[talker]; ok {
+			continue
+		}
+		seen[talker] = struct{}{}
+		out = append(out, talker)
+	}
+	return out
+}
+
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "?"
+	}
+	return strings.Join(parts, ",")
+}
+
+func (s *Store) LoadContext(talker, model string, dim int, centerSeq int64, before, after int) ([]record, error) {
+	if strings.TrimSpace(talker) == "" || centerSeq <= 0 || (before <= 0 && after <= 0) {
+		return nil, nil
+	}
+	prev, err := s.loadContextSide(talker, model, dim, centerSeq, before, true)
+	if err != nil {
+		return nil, err
+	}
+	next, err := s.loadContextSide(talker, model, dim, centerSeq, after, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]record, 0, len(prev)+len(next))
+	out = append(out, prev...)
+	out = append(out, next...)
+	return out, nil
+}
+
+func (s *Store) loadContextSide(talker, model string, dim int, centerSeq int64, limit int, before bool) ([]record, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	op := ">"
+	order := "ASC"
+	if before {
+		op = "<"
+		order = "DESC"
+	}
+	query := fmt.Sprintf(`SELECT talker, seq, sender, is_self, msg_type, msg_sub_type, ts, content, model, dim, vector_json
+FROM semantic_embeddings
+WHERE talker=? AND model=? AND dim=? AND seq%s?
+ORDER BY seq %s
+LIMIT ?`, op, order)
+	rows, err := s.db.Query(query, talker, model, dim, centerSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]record, 0, limit)
+	for rows.Next() {
+		var item record
+		var isSelf int
+		var vecRaw string
+		if err := rows.Scan(
+			&item.Talker, &item.Seq, &item.Sender, &isSelf, &item.Type, &item.SubType,
+			&item.TS, &item.Content, &item.Model, &item.Dim, &vecRaw,
+		); err != nil {
+			return nil, err
+		}
+		item.IsSelf = isSelf == 1
+		_ = json.Unmarshal([]byte(vecRaw), &item.Vector)
+		out = append(out, item)
+	}
+	if before {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) SaveMeta(key, value string) error {
