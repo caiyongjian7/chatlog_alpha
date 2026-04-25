@@ -38,6 +38,15 @@ import (
 //go:embed static
 var EFS embed.FS
 
+var (
+	semanticWechatUsernamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{5,}$`)
+	semanticDateWindowPattern     = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	semanticMonthDayPattern       = regexp.MustCompile(`(\d{1,2})月(\d{1,2})[日号]?`)
+	semanticASCIIAlnumTokenRe     = regexp.MustCompile(`^[a-z0-9._-]+$`)
+	semanticHasCJKRe              = regexp.MustCompile(`[\p{Han}]`)
+	semanticMentionRe             = regexp.MustCompile(`@([^\s@，,。；;：:！!？?\[\]\(\)（）<>《》"']{1,32})`)
+)
+
 func (s *Service) initRouter() {
 	s.initBaseRouter()
 	s.initMediaRouter()
@@ -71,6 +80,7 @@ func (s *Service) initBaseRouter() {
 	s.router.POST("/api/v1/semantic/config", s.handleSemanticConfigSet)
 	s.router.POST("/api/v1/semantic/test", s.handleSemanticTest)
 	s.router.GET("/api/v1/semantic/index/status", s.handleSemanticIndexStatus)
+	s.router.GET("/api/v1/semantic/index/preview", s.handleSemanticIndexPreview)
 	s.router.POST("/api/v1/semantic/qa/stream", s.handleSemanticQAStream)
 
 	s.router.NoRoute(s.NoRoute)
@@ -108,11 +118,14 @@ func (s *Service) initAPIRouter() {
 		api.GET("/db/query", s.handleExecuteSQL)
 		api.POST("/cache/clear", s.handleClearCache)
 		api.POST("/semantic/index/rebuild", s.handleSemanticRebuild)
+		api.POST("/semantic/index/pause", s.handleSemanticPause)
+		api.POST("/semantic/index/resume", s.handleSemanticResume)
 		api.POST("/semantic/index/clear", s.handleSemanticClear)
 		api.GET("/semantic/search", s.handleSemanticSearch)
 		api.POST("/semantic/qa", s.handleSemanticQA)
 		api.GET("/semantic/topics", s.handleSemanticTopics)
 		api.GET("/semantic/profiles", s.handleSemanticProfiles)
+		api.GET("/dashboard/trend", s.handleDashboardTrend)
 	}
 }
 
@@ -226,6 +239,7 @@ type semanticConfigReq struct {
 	EnableQA            bool    `json:"enable_qa"`
 	EnableTopics        bool    `json:"enable_topics"`
 	EnableProfiles      bool    `json:"enable_profiles"`
+	EnableLLMChunk      bool    `json:"enable_llm_chunk"`
 	RealtimeIndex       bool    `json:"realtime_index"`
 	IndexWorkers        int     `json:"index_workers"`
 	RecallK             int     `json:"recall_k"`
@@ -255,6 +269,7 @@ func (s *Service) handleSemanticConfigGet(c *gin.Context) {
 		"enable_qa":            norm.EnableQA,
 		"enable_topics":        norm.EnableTopics,
 		"enable_profiles":      norm.EnableProfiles,
+		"enable_llm_chunk":     norm.EnableLLMChunk,
 		"realtime_index":       norm.RealtimeIndex,
 		"index_workers":        norm.IndexWorkers,
 		"recall_k":             norm.RecallK,
@@ -284,6 +299,7 @@ func (s *Service) handleSemanticConfigSet(c *gin.Context) {
 		EnableQA:            true,
 		EnableTopics:        true,
 		EnableProfiles:      true,
+		EnableLLMChunk:      req.EnableLLMChunk,
 		RealtimeIndex:       true,
 		IndexWorkers:        req.IndexWorkers,
 		RecallK:             req.RecallK,
@@ -348,6 +364,22 @@ func (s *Service) handleSemanticIndexStatus(c *gin.Context) {
 	writeByFormat(c, s.semantic.Status(), c.Query("format"))
 }
 
+func (s *Service) handleSemanticIndexPreview(c *gin.Context) {
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	kind := strings.TrimSpace(c.Query("kind"))
+	limit := parseIntDefault(c.Query("limit"), 20)
+	offset := parseIntDefault(c.Query("offset"), 0)
+	preview, err := s.semantic.PreviewIndex(kind, limit, offset)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	writeByFormat(c, preview, c.Query("format"))
+}
+
 func (s *Service) handleSemanticRebuild(c *gin.Context) {
 	if s.semantic == nil {
 		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
@@ -360,6 +392,30 @@ func (s *Service) handleSemanticRebuild(c *gin.Context) {
 		return
 	}
 	writeByFormat(c, gin.H{"ok": true, "accepted": true, "status": s.semantic.Status()}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticPause(c *gin.Context) {
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	if err := s.semantic.Pause(); err != nil {
+		errors.Err(c, err)
+		return
+	}
+	writeByFormat(c, gin.H{"ok": true, "status": s.semantic.Status()}, c.Query("format"))
+}
+
+func (s *Service) handleSemanticResume(c *gin.Context) {
+	if s.semantic == nil {
+		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
+		return
+	}
+	if err := s.semantic.Resume(12 * time.Hour); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "status": s.semantic.Status()})
+		return
+	}
+	writeByFormat(c, gin.H{"ok": true, "status": s.semantic.Status()}, c.Query("format"))
 }
 
 func (s *Service) handleSemanticClear(c *gin.Context) {
@@ -391,10 +447,11 @@ func (s *Service) handleSemanticSearch(c *gin.Context) {
 		errors.Err(c, errors.InvalidArg("query"))
 		return
 	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	if limit <= 0 {
-		limit = 20
+	limit := 0
+	if strings.TrimSpace(c.Query("limit")) != "" {
+		limit, _ = strconv.Atoi(c.Query("limit"))
 	}
+	limit = semanticSearchTopN(limit, c.Query("depth"))
 	rerank := strings.EqualFold(strings.TrimSpace(c.DefaultQuery("rerank", "1")), "1") ||
 		strings.EqualFold(strings.TrimSpace(c.Query("rerank")), "true")
 	talker := strings.TrimSpace(c.Query("chat"))
@@ -404,7 +461,8 @@ func (s *Service) handleSemanticSearch(c *gin.Context) {
 		errors.Err(c, err)
 		return
 	}
-	_, _, start, end := parseSemanticWindow(c.DefaultQuery("window", "all"))
+	windowKey := semanticEffectiveWindow(query, c.DefaultQuery("window", "7d"))
+	_, _, start, end := parseSemanticWindow(windowKey)
 	result, err := s.semantic.SearchWithMetaScoped(c.Request.Context(), query, talkers, start, end, limit, rerank)
 	if err != nil {
 		errors.Err(c, err)
@@ -414,7 +472,8 @@ func (s *Service) handleSemanticSearch(c *gin.Context) {
 		"query":          query,
 		"chat":           talker,
 		"source_count":   len(talkers),
-		"window":         c.DefaultQuery("window", "all"),
+		"window":         windowKey,
+		"depth":          normalizeSemanticDepth(c.Query("depth")),
 		"count":          len(result.Hits),
 		"rerank":         rerank,
 		"rerank_tried":   result.RerankTried,
@@ -425,114 +484,25 @@ func (s *Service) handleSemanticSearch(c *gin.Context) {
 }
 
 func (s *Service) handleSemanticQA(c *gin.Context) {
-	var req struct {
-		Query       string                 `json:"query"`
-		Chat        string                 `json:"chat"`
-		Chats       []string               `json:"chats"`
-		Window      string                 `json:"window"`
-		SourceLimit int                    `json:"source_limit"`
-		TopN        int                    `json:"top_n"`
-		History     []semantic.ChatMessage `json:"history"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		errors.Err(c, errors.InvalidArg("body"))
-		return
-	}
-	req.Query = strings.TrimSpace(req.Query)
-	if req.Query == "" {
-		errors.Err(c, errors.InvalidArg("query"))
-		return
-	}
-	if req.TopN <= 0 {
-		req.TopN = 8
-	}
-	talkers, err := s.semanticTalkerScope(strings.TrimSpace(req.Chat), strings.Join(req.Chats, ","), req.SourceLimit)
+	req, err := s.parseSemanticQARequest(c)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
-	_, _, start, end := parseSemanticWindow(req.Window)
-	direct, plan, err := s.trySemanticRoutedDirect(c.Request.Context(), req.Query, talkers, req.Window, req.TopN)
+	payload, err := s.executeSemanticQA(c.Request.Context(), req, nil)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
-	if direct != nil {
-		direct.Debug = attachEmptyReason(direct.Debug, direct.Reason)
-		writeByFormat(c, gin.H{
-			"query":          req.Query,
-			"chat":           req.Chat,
-			"source_count":   len(talkers),
-			"window":         direct.Window,
-			"count":          direct.Count,
-			"answer":         direct.Answer,
-			"evidence":       direct.Evidence,
-			"direct":         true,
-			"debug":          direct.Debug,
-			"reason":         direct.Reason,
-			"rerank_tried":   false,
-			"rerank_applied": false,
-			"rerank_error":   "",
-		}, c.Query("format"))
-		return
-	}
-	if s.semantic == nil {
-		errors.Err(c, fmt.Errorf("semantic manager unavailable"))
-		return
-	}
-	if err := s.ensureSemanticIndexReady(); err != nil {
-		errors.Err(c, err)
-		return
-	}
-	vectorQuery := semanticVectorQuery(req.Query, plan)
-	answer, hits, searchMeta, err := s.semantic.AnswerScoped(c.Request.Context(), vectorQuery, talkers, start, end, req.TopN, req.History)
-	if err != nil {
-		errors.Err(c, err)
-		return
-	}
-	writeByFormat(c, gin.H{
-		"query":          req.Query,
-		"chat":           req.Chat,
-		"source_count":   len(talkers),
-		"window":         defaultString(req.Window, "all"),
-		"count":          len(hits),
-		"answer":         answer,
-		"evidence":       hits,
-		"debug":          semanticPlanDebug(plan, talkers, "vector/rag"),
-		"rerank_tried":   searchMeta.RerankTried,
-		"rerank_applied": searchMeta.RerankApplied,
-		"rerank_error":   searchMeta.RerankError,
-	}, c.Query("format"))
+	writeByFormat(c, payload, c.Query("format"))
 }
 
 func (s *Service) handleSemanticQAStream(c *gin.Context) {
-	var req struct {
-		Query       string                 `json:"query"`
-		Chat        string                 `json:"chat"`
-		Chats       []string               `json:"chats"`
-		Window      string                 `json:"window"`
-		SourceLimit int                    `json:"source_limit"`
-		TopN        int                    `json:"top_n"`
-		History     []semantic.ChatMessage `json:"history"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		errors.Err(c, errors.InvalidArg("body"))
-		return
-	}
-	req.Query = strings.TrimSpace(req.Query)
-	if req.Query == "" {
-		errors.Err(c, errors.InvalidArg("query"))
-		return
-	}
-	if req.TopN <= 0 {
-		req.TopN = 8
-	}
-	talkers, err := s.semanticTalkerScope(strings.TrimSpace(req.Chat), strings.Join(req.Chats, ","), req.SourceLimit)
+	req, err := s.parseSemanticQARequest(c)
 	if err != nil {
 		errors.Err(c, err)
 		return
 	}
-	_, _, start, end := parseSemanticWindow(req.Window)
 
 	w := c.Writer
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -553,62 +523,14 @@ func (s *Service) handleSemanticQAStream(c *gin.Context) {
 		}
 		return nil
 	}
-	direct, plan, err := s.trySemanticRoutedDirect(c.Request.Context(), req.Query, talkers, req.Window, req.TopN)
-	if err != nil {
-		_ = writeEvent("error", gin.H{"error": err.Error()})
-		return
-	}
-	if direct != nil {
-		direct.Debug = attachEmptyReason(direct.Debug, direct.Reason)
-		_ = writeEvent("delta", gin.H{"text": direct.Answer})
-		_ = writeEvent("done", gin.H{
-			"query":          req.Query,
-			"chat":           req.Chat,
-			"source_count":   len(talkers),
-			"window":         direct.Window,
-			"count":          direct.Count,
-			"answer":         direct.Answer,
-			"evidence":       direct.Evidence,
-			"direct":         true,
-			"debug":          direct.Debug,
-			"reason":         direct.Reason,
-			"rerank_tried":   false,
-			"rerank_applied": false,
-			"rerank_error":   "",
-		})
-		return
-	}
-	if s.semantic == nil {
-		_ = writeEvent("error", gin.H{"error": "semantic manager unavailable"})
-		return
-	}
-	if err := s.ensureSemanticIndexReady(); err != nil {
-		_ = writeEvent("error", gin.H{"error": err.Error()})
-		return
-	}
-	var full strings.Builder
-	vectorQuery := semanticVectorQuery(req.Query, plan)
-	hits, searchMeta, err := s.semantic.AnswerStreamScoped(c.Request.Context(), vectorQuery, talkers, start, end, req.TopN, req.History, func(delta string) error {
-		full.WriteString(delta)
+	payload, err := s.executeSemanticQA(c.Request.Context(), req, func(delta string) error {
 		return writeEvent("delta", gin.H{"text": delta})
 	})
 	if err != nil {
 		_ = writeEvent("error", gin.H{"error": err.Error()})
 		return
 	}
-	_ = writeEvent("done", gin.H{
-		"query":          req.Query,
-		"chat":           req.Chat,
-		"source_count":   len(talkers),
-		"window":         defaultString(req.Window, "all"),
-		"count":          len(hits),
-		"answer":         full.String(),
-		"evidence":       hits,
-		"debug":          semanticPlanDebug(plan, talkers, "vector/rag"),
-		"rerank_tried":   searchMeta.RerankTried,
-		"rerank_applied": searchMeta.RerankApplied,
-		"rerank_error":   searchMeta.RerankError,
-	})
+	_ = writeEvent("done", payload)
 }
 
 func (s *Service) handleSemanticTopics(c *gin.Context) {
@@ -644,6 +566,65 @@ func (s *Service) handleSemanticTopics(c *gin.Context) {
 		"daily":         daily,
 		"summary":       summary,
 		"summary_error": errorString(summaryErr),
+	}, c.Query("format"))
+}
+
+func (s *Service) handleDashboardTrend(c *gin.Context) {
+	chat := strings.TrimSpace(c.Query("chat"))
+	windowKey, windowLabel, start, end := parseSemanticWindow(c.Query("window"))
+	msgs, truncated, err := s.collectSemanticMessages(chat, start, end)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	daily := summarizeDailyMessages(msgs, start, end)
+	wantSummary := strings.EqualFold(strings.TrimSpace(c.DefaultQuery("summary", "1")), "1")
+	topicsSource := "local_fallback"
+	topicsErr := error(nil)
+	topics := summarizeTopics(msgs, 50)
+	if wantSummary {
+		if llmTopics, err := s.extractDashboardTopicsWithLLM(c.Request.Context(), msgs, 50); err == nil && len(llmTopics) > 0 {
+			topics = llmTopics
+			topicsSource = "llm"
+		} else if err != nil {
+			topicsErr = err
+		}
+	}
+	mentions := summarizeMentions(msgs, 20)
+	summary := ""
+	summaryErr := error(nil)
+	if wantSummary {
+		rawMessages := dashboardSummaryMessageRows(msgs, 260)
+		summary, summaryErr = s.summarizeSemanticWithTimeout(c.Request.Context(), "仪表盘热点摘要", gin.H{
+			"window":              windowLabel,
+			"chat":                chat,
+			"count":               len(msgs),
+			"raw_message_sampled": len(rawMessages) < len(msgs),
+			"raw_message_count":   len(rawMessages),
+			"raw_messages":        rawMessages,
+			"daily":               lastN(daily, 45),
+			"llm_topics":          firstN(topics, 20),
+			"topics_source":       topicsSource,
+			"top_mentions":        firstN(mentions, 15),
+			"instruction":         "请优先基于 raw_messages 原始聊天内容自行提炼热点，llm_topics 是已由模型归并过的候选主题，top_mentions 表示被 @ 最多的人。输出 Markdown 中文仪表盘热点摘要，包含：1. 主要结论；2. 值得关注的变化；3. 被 @ 关注点；4. 不确定性与使用提醒。不要逐条复述原始消息，不要编造统计中没有的信息。",
+		}, 45*time.Second)
+	}
+	writeByFormat(c, gin.H{
+		"chat":          chat,
+		"window":        windowKey,
+		"window_label":  windowLabel,
+		"from":          formatWindowTime(start),
+		"to":            formatWindowTime(end),
+		"count":         len(msgs),
+		"truncated":     truncated,
+		"topics":        topics,
+		"topics_source": topicsSource,
+		"topics_error":  errorString(topicsErr),
+		"mentions":      mentions,
+		"daily":         daily,
+		"summary":       summary,
+		"summary_error": errorString(summaryErr),
+		"source":        "messages",
 	}, c.Query("format"))
 }
 
@@ -853,10 +834,11 @@ type semanticDirectMessageResult struct {
 }
 
 type semanticEntityCandidate struct {
-	Username string `json:"username"`
-	Display  string `json:"display"`
-	Kind     string `json:"kind"`
-	Source   string `json:"source"`
+	Username string  `json:"username"`
+	Display  string  `json:"display"`
+	Kind     string  `json:"kind"`
+	Source   string  `json:"source"`
+	Score    float64 `json:"score,omitempty"`
 }
 
 type semanticEntityResolution struct {
@@ -923,7 +905,7 @@ func semanticPlanPrompt(query, fallbackWindow string, sourceCount int, retryHint
 - intent: 上述之一
 - entity: 联系人/群成员/群名，无法确定则空
 - topic: 语义主题或关键词，精确列消息可空
-- window: today/yesterday/7d/30d/all，无法判断用 %q
+- window: today/yesterday/7d/30d/90d/1y/all 或 YYYY-MM-DD，无法判断用 %q
 - chat: 明确群/会话名，无法确定则空
 - msg_type: image/file/voice/video/sticker/text，非媒体可空
 - answer_mode: list/summary/stats，无法判断用 summary
@@ -1044,22 +1026,12 @@ func normalizeSemanticPlan(plan semanticQueryPlan, fallbackWindow string) semant
 	plan.Intent = strings.TrimSpace(strings.ToLower(plan.Intent))
 	plan.Entity = strings.TrimSpace(plan.Entity)
 	plan.Topic = strings.TrimSpace(plan.Topic)
-	plan.Window = strings.TrimSpace(strings.ToLower(plan.Window))
+	plan.Window = normalizeSemanticWindowKey(plan.Window)
 	plan.Chat = strings.TrimSpace(plan.Chat)
 	plan.MsgType = strings.TrimSpace(strings.ToLower(plan.MsgType))
 	plan.AnswerMode = strings.TrimSpace(strings.ToLower(plan.AnswerMode))
 	if plan.Window == "" {
 		plan.Window = fallbackWindow
-	}
-	switch plan.Window {
-	case "今天":
-		plan.Window = "today"
-	case "昨天", "昨日":
-		plan.Window = "yesterday"
-	case "近七天", "最近七天", "week":
-		plan.Window = "7d"
-	case "近一月", "最近一月", "month":
-		plan.Window = "30d"
 	}
 	if plan.Intent == "" {
 		plan.Intent = "semantic_search"
@@ -1096,9 +1068,11 @@ func validateSemanticPlan(plan semanticQueryPlan) error {
 		return fmt.Errorf("invalid intent %q", plan.Intent)
 	}
 	switch plan.Window {
-	case "", "today", "yesterday", "7d", "30d", "all":
+	case "", "today", "yesterday", "7d", "30d", "90d", "1y", "all":
 	default:
-		return fmt.Errorf("invalid window %q", plan.Window)
+		if !semanticDateWindowPattern.MatchString(plan.Window) {
+			return fmt.Errorf("invalid window %q", plan.Window)
+		}
 	}
 	switch plan.AnswerMode {
 	case "", "list", "summary", "stats":
@@ -1117,8 +1091,15 @@ func validateSemanticPlan(plan semanticQueryPlan) error {
 	return nil
 }
 
-func (s *Service) trySemanticRoutedDirect(ctx context.Context, query string, talkers []string, fallbackWindow string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
+func (s *Service) trySemanticRoutedDirect(ctx context.Context, query string, talkers []string, fallbackWindow string, entityOverride string, topN int) (*semanticDirectMessageResult, semanticQueryPlan, error) {
 	plan := s.planSemanticQuery(ctx, query, fallbackWindow, talkers)
+	if override := strings.TrimSpace(entityOverride); override != "" {
+		plan.Entity = override
+		if strings.TrimSpace(plan.Intent) == "" || plan.Intent == "unknown" || plan.Intent == "semantic_search" {
+			plan.Intent = "sender_messages"
+		}
+		plan.Reason = appendChineseReason(plan.Reason, "使用前端确认的实体候选")
+	}
 	switch plan.Intent {
 	case "sender_messages":
 		return s.runSenderMessagesPlan(ctx, plan, talkers, fallbackWindow, topN)
@@ -1168,13 +1149,14 @@ func (s *Service) runSenderMessagesPlan(ctx context.Context, plan semanticQueryP
 	if entity == "" {
 		return nil, plan, nil
 	}
-	_, label, start, end := parseSemanticWindow(plan.Window)
+	_, label, start, end := parseSemanticWindow(defaultString(plan.Window, fallbackWindow))
 	if plan.Window == "yesterday" {
 		label, start, end = yesterdayWindow()
 	}
 	result, err := s.collectSenderMessages(ctx, entity, talkers, start, end, label, topN)
 	if result != nil {
 		result.Debug = mergeDebug(result.Debug, semanticPlanDebug(plan, talkers, "direct/sql"))
+		s.applyDirectAnswerMode(ctx, plan, result, "发言人消息总结")
 	}
 	return result, plan, err
 }
@@ -1194,6 +1176,7 @@ func (s *Service) runKeywordPlan(ctx context.Context, plan semanticQueryPlan, qu
 	}
 	result := messagesDirectResult(fmt.Sprintf("包含“%s”的消息", keyword), label, msgs, topN)
 	result.Debug = semanticPlanDebug(plan, talkers, "direct/keyword")
+	s.applyDirectAnswerMode(ctx, plan, result, "关键词消息总结")
 	return result, plan, nil
 }
 
@@ -1261,7 +1244,22 @@ func (s *Service) runMediaPlan(ctx context.Context, plan semanticQueryPlan, talk
 	}
 	result := messagesDirectResult(mediaLabel+"消息", label, filtered, topN)
 	result.Debug = semanticPlanDebug(plan, talkers, "direct/media")
+	s.applyDirectAnswerMode(ctx, plan, result, "媒体消息总结")
 	return result, plan, nil
+}
+
+func (s *Service) applyDirectAnswerMode(ctx context.Context, plan semanticQueryPlan, result *semanticDirectMessageResult, title string) {
+	if result == nil || result.Count == 0 || plan.AnswerMode != "summary" {
+		return
+	}
+	summary, err := s.summarizeSemantic(ctx, title, gin.H{
+		"plan":     plan,
+		"window":   result.Window,
+		"evidence": result.Evidence,
+	})
+	if err == nil && strings.TrimSpace(summary) != "" {
+		result.Answer = summary
+	}
 }
 
 func semanticMediaType(raw string) (int64, int64, string) {
@@ -1311,6 +1309,18 @@ func (s *Service) resolvePlanTalkers(plan semanticQueryPlan, fallback []string) 
 		}
 		if contact, err := s.db.GetContact(key); err == nil && contact != nil {
 			return []string{contact.UserName}
+		}
+		if s.semantic != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			hits, err := s.semantic.SearchEntities(ctx, key, fallback, 5)
+			cancel()
+			if err == nil {
+				for _, hit := range hits {
+					if hit.Kind == "chatroom" || hit.Kind == "contact" {
+						return []string{hit.Username}
+					}
+				}
+			}
 		}
 	}
 	return fallback
@@ -1364,6 +1374,153 @@ func attachEmptyReason(debug gin.H, reason string) gin.H {
 	}
 	debug["empty_reason"] = reason
 	return debug
+}
+
+func appendChineseReason(base, extra string) string {
+	base = strings.Trim(strings.TrimSpace(base), "；; ")
+	extra = strings.Trim(strings.TrimSpace(extra), "；; ")
+	if base == "" {
+		return extra
+	}
+	if extra == "" {
+		return base
+	}
+	return base + "；" + extra
+}
+
+func semanticEffectiveWindow(query, fallback string) string {
+	if inferred := inferSemanticWindowFromQuery(query); inferred != "" {
+		return inferred
+	}
+	fallback = normalizeSemanticWindowKey(fallback)
+	if fallback == "" {
+		return "7d"
+	}
+	return fallback
+}
+
+func semanticPlanWindow(plan semanticQueryPlan, fallback string) string {
+	window := normalizeSemanticWindowKey(plan.Window)
+	if window == "" {
+		return semanticEffectiveWindow("", fallback)
+	}
+	return window
+}
+
+func inferSemanticWindowFromQuery(query string) string {
+	raw := strings.TrimSpace(query)
+	if raw == "" {
+		return ""
+	}
+	lower := strings.ToLower(raw)
+	if semanticDateWindowPattern.MatchString(lower) {
+		return lower
+	}
+	if match := semanticDateWindowPattern.FindString(lower); match != "" {
+		return match
+	}
+	if match := semanticMonthDayPattern.FindStringSubmatch(raw); len(match) == 3 {
+		month, _ := strconv.Atoi(match[1])
+		day, _ := strconv.Atoi(match[2])
+		if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
+			now := time.Now()
+			return fmt.Sprintf("%04d-%02d-%02d", now.Year(), month, day)
+		}
+	}
+	switch {
+	case strings.Contains(raw, "昨天") || strings.Contains(raw, "昨日") || strings.Contains(lower, "yesterday"):
+		return "yesterday"
+	case strings.Contains(raw, "今天") || strings.Contains(raw, "今日") || strings.Contains(lower, "today"):
+		return "today"
+	case strings.Contains(raw, "近七天") || strings.Contains(raw, "最近七天") || strings.Contains(raw, "近7天") || strings.Contains(raw, "最近7天") || strings.Contains(raw, "这周") || strings.Contains(raw, "本周"):
+		return "7d"
+	case strings.Contains(raw, "近一月") || strings.Contains(raw, "最近一月") || strings.Contains(raw, "近1月") || strings.Contains(raw, "最近1月") || strings.Contains(raw, "这个月") || strings.Contains(raw, "本月"):
+		return "30d"
+	case strings.Contains(raw, "近季度") || strings.Contains(raw, "最近季度") || strings.Contains(raw, "近三月") || strings.Contains(raw, "最近三月") || strings.Contains(raw, "近3月") || strings.Contains(raw, "最近3月"):
+		return "90d"
+	case strings.Contains(raw, "近一年") || strings.Contains(raw, "最近一年") || strings.Contains(raw, "近1年") || strings.Contains(raw, "最近1年") || strings.Contains(raw, "今年"):
+		return "1y"
+	case strings.Contains(raw, "全部") || strings.Contains(raw, "所有") || strings.Contains(raw, "历史") || strings.Contains(lower, "all"):
+		return "all"
+	default:
+		return ""
+	}
+}
+
+func normalizeSemanticWindowKey(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	switch raw {
+	case "", "auto", "default":
+		return ""
+	case "今天", "今日", "today", "1d":
+		return "today"
+	case "昨天", "昨日", "yesterday":
+		return "yesterday"
+	case "近七天", "最近七天", "近7天", "最近7天", "week", "7d":
+		return "7d"
+	case "近一月", "最近一月", "近1月", "最近1月", "month", "1m", "30d":
+		return "30d"
+	case "近季度", "最近季度", "近三月", "最近三月", "近3月", "最近3月", "quarter", "3m", "90d":
+		return "90d"
+	case "近一年", "最近一年", "近1年", "最近1年", "year", "1y":
+		return "1y"
+	case "全部", "所有", "历史", "all":
+		return "all"
+	default:
+		if semanticDateWindowPattern.MatchString(raw) {
+			return raw
+		}
+		return raw
+	}
+}
+
+func normalizeSemanticDepth(depth string) string {
+	switch strings.ToLower(strings.TrimSpace(depth)) {
+	case "deep", "深入":
+		return "deep"
+	case "wide", "广泛":
+		return "wide"
+	default:
+		return "standard"
+	}
+}
+
+func semanticQATopN(requested int, depth string) int {
+	if requested > 0 {
+		return clampInt(requested, 1, 60)
+	}
+	switch normalizeSemanticDepth(depth) {
+	case "deep":
+		return 16
+	case "wide":
+		return 30
+	default:
+		return 8
+	}
+}
+
+func semanticSearchTopN(requested int, depth string) int {
+	if requested > 0 {
+		return clampInt(requested, 1, 200)
+	}
+	switch normalizeSemanticDepth(depth) {
+	case "deep":
+		return 50
+	case "wide":
+		return 100
+	default:
+		return 20
+	}
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func semanticVectorQuery(query string, plan semanticQueryPlan) string {
@@ -1481,6 +1638,134 @@ func messagesToPlainRows(msgs []*model.Message) []gin.H {
 			"sender": pickText(msg.SenderName, msg.Sender),
 			"text":   singleLineText(msg.PlainTextContent()),
 		})
+	}
+	return out
+}
+
+func dashboardSummaryMessageRows(msgs []*model.Message, maxRows int) []gin.H {
+	if maxRows <= 0 {
+		maxRows = 200
+	}
+	type bucket struct {
+		Day    string
+		Talker string
+		Items  []*model.Message
+	}
+	buckets := map[string]*bucket{}
+	hashSeen := map[string]struct{}{}
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		text := semantic.NormalizeMessageText(msg)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		hash := strings.ToLower(strings.TrimSpace(singleLineText(text)))
+		if len([]rune(hash)) > 120 {
+			hash = string([]rune(hash)[:120])
+		}
+		if hash != "" {
+			if _, ok := hashSeen[hash]; ok {
+				continue
+			}
+			hashSeen[hash] = struct{}{}
+		}
+		day := msg.Time.Format("2006-01-02")
+		key := day + "\x00" + msg.Talker
+		b := buckets[key]
+		if b == nil {
+			b = &bucket{Day: day, Talker: msg.Talker}
+			buckets[key] = b
+		}
+		b.Items = append(b.Items, msg)
+	}
+	bucketList := make([]*bucket, 0, len(buckets))
+	for _, b := range buckets {
+		sort.Slice(b.Items, func(i, j int) bool { return b.Items[i].Time.Before(b.Items[j].Time) })
+		bucketList = append(bucketList, b)
+	}
+	sort.Slice(bucketList, func(i, j int) bool {
+		if bucketList[i].Day == bucketList[j].Day {
+			return bucketList[i].Talker < bucketList[j].Talker
+		}
+		return bucketList[i].Day < bucketList[j].Day
+	})
+	selected := make([]*model.Message, 0, maxRows)
+	for _, b := range bucketList {
+		if len(selected) >= maxRows {
+			break
+		}
+		quota := 2
+		if len(b.Items) >= 20 {
+			quota = 3
+		}
+		for _, msg := range sampleMessagesEvenly(b.Items, quota) {
+			selected = append(selected, msg)
+			if len(selected) >= maxRows {
+				break
+			}
+		}
+	}
+	if len(selected) < maxRows {
+		all := make([]*model.Message, 0)
+		selectedSeen := map[*model.Message]struct{}{}
+		for _, msg := range selected {
+			selectedSeen[msg] = struct{}{}
+		}
+		for _, b := range bucketList {
+			for _, msg := range b.Items {
+				if _, ok := selectedSeen[msg]; ok {
+					continue
+				}
+				all = append(all, msg)
+			}
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].Time.Before(all[j].Time) })
+		for _, msg := range sampleMessagesEvenly(all, maxRows-len(selected)) {
+			selected = append(selected, msg)
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i].Time.Before(selected[j].Time) })
+	out := make([]gin.H, 0, len(selected))
+	for _, msg := range selected {
+		text := semantic.NormalizeMessageText(msg)
+		runes := []rune(singleLineText(text))
+		if len(runes) > 260 {
+			text = string(runes[:260]) + "..."
+		} else {
+			text = string(runes)
+		}
+		out = append(out, gin.H{
+			"time":   msg.Time.Format("2006-01-02 15:04:05"),
+			"chat":   pickText(msg.TalkerName, msg.Talker),
+			"sender": pickText(msg.SenderName, msg.Sender),
+			"text":   text,
+		})
+	}
+	return out
+}
+
+func sampleMessagesEvenly(items []*model.Message, limit int) []*model.Message {
+	if limit <= 0 || len(items) == 0 {
+		return nil
+	}
+	if len(items) <= limit {
+		return append([]*model.Message(nil), items...)
+	}
+	out := make([]*model.Message, 0, limit)
+	seen := map[int]struct{}{}
+	step := float64(len(items)) / float64(limit)
+	for i := 0; i < limit; i++ {
+		idx := int(float64(i) * step)
+		if idx >= len(items) {
+			idx = len(items) - 1
+		}
+		if _, ok := seen[idx]; ok {
+			continue
+		}
+		seen[idx] = struct{}{}
+		out = append(out, items[idx])
 	}
 	return out
 }
@@ -1631,6 +1916,16 @@ func parseDirectSenderMessageQuery(query, fallbackWindow string) (string, string
 
 func stripDirectTimeWord(s string) (string, string) {
 	s = strings.TrimSpace(s)
+	if window := inferSemanticWindowFromQuery(s); window != "" {
+		clean := strings.TrimSpace(strings.ReplaceAll(s, window, ""))
+		for _, word := range []string{"今天", "今日", "昨天", "昨日", "近七天", "最近七天", "近7天", "最近7天", "近一月", "最近一月", "近1月", "最近1月", "本周", "这周", "本月", "这个月", "全部", "所有", "历史"} {
+			clean = strings.TrimSpace(strings.ReplaceAll(clean, word, ""))
+		}
+		if m := semanticMonthDayPattern.FindString(s); m != "" {
+			clean = strings.TrimSpace(strings.ReplaceAll(clean, m, ""))
+		}
+		return clean, window
+	}
 	timeWords := []struct {
 		Word string
 		Key  string
@@ -1674,46 +1969,80 @@ func (s *Service) resolveSenderIDs(entity string) map[string]struct{} {
 			}
 		}
 	}
+	if s.semantic != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if hits, err := s.semantic.SearchEntities(ctx, entity, nil, 8); err == nil {
+			for _, hit := range hits {
+				if hit.Kind == "contact" || hit.Kind == "room_member" {
+					out[hit.Username] = struct{}{}
+				}
+			}
+		}
+	}
 	return out
 }
 
 func (s *Service) resolveSenderEntity(entity string, talkers []string) semanticEntityResolution {
 	res := semanticEntityResolution{Query: strings.TrimSpace(entity)}
-	seen := map[string]struct{}{}
-	add := func(username, display, kind, source string) {
+	seen := map[string]int{}
+	add := func(username, display, kind, source string, score float64) {
 		username = strings.TrimSpace(username)
 		if username == "" {
 			return
 		}
-		key := kind + ":" + username + ":" + display
-		if _, ok := seen[key]; ok {
+		key := senderEntityCandidateKey(username, kind, source)
+		rank := senderEntityCandidateRank(source, kind)
+		if prev, ok := seen[key]; ok && prev >= rank {
 			return
 		}
-		seen[key] = struct{}{}
-		res.Candidates = append(res.Candidates, semanticEntityCandidate{
+		seen[key] = rank
+		candidate := semanticEntityCandidate{
 			Username: username,
 			Display:  strings.TrimSpace(display),
 			Kind:     kind,
 			Source:   source,
-		})
+			Score:    score,
+		}
+		for i := range res.Candidates {
+			if senderEntityCandidateKey(res.Candidates[i].Username, res.Candidates[i].Kind, res.Candidates[i].Source) == key {
+				res.Candidates[i] = candidate
+				return
+			}
+		}
+		res.Candidates = append(res.Candidates, candidate)
 	}
 	entity = strings.TrimSpace(entity)
 	if entity == "" {
 		return res
 	}
 	if entity == "我" || entity == "自己" || strings.EqualFold(entity, "me") {
-		add("self", "我", "self", "builtin")
+		add("self", "我", "self", "builtin", 1)
 		return res
 	}
+	if looksLikeWechatUsername(entity) {
+		add(entity, entity, "username", "direct", 1)
+	}
 	if contact, err := s.db.GetContact(entity); err == nil && contact != nil {
-		add(contact.UserName, contact.DisplayName(), "contact", "exact")
+		add(contact.UserName, contact.DisplayName(), "contact", "exact", 1)
 	}
 	if contacts, err := s.db.GetContacts(entity, 20, 0); err == nil && contacts != nil {
 		for _, contact := range contacts.Items {
 			if contact == nil {
 				continue
 			}
-			add(contact.UserName, contact.DisplayName(), "contact", "search")
+			add(contact.UserName, contact.DisplayName(), "contact", "search", 0.75)
+		}
+	}
+	if s.semantic != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if hits, err := s.semantic.SearchEntities(ctx, entity, talkers, 8); err == nil {
+			for _, hit := range hits {
+				if hit.Kind == "contact" || hit.Kind == "room_member" {
+					add(hit.Username, hit.Display, hit.Kind, hit.Source, hit.Score)
+				}
+			}
 		}
 	}
 	for _, talker := range talkers {
@@ -1727,12 +2056,85 @@ func (s *Service) resolveSenderEntity(entity string, talkers []string) semanticE
 				display = strings.TrimSpace(user.DisplayName)
 			}
 			if directNameMatch(entity, display) || directNameMatch(entity, user.UserName) {
-				add(user.UserName, display, "room_member", room.DisplayName())
+				add(user.UserName, display, "room_member", "room_exact", 0.95)
 			}
 		}
 	}
-	res.Ambiguous = len(res.Candidates) > 1
+	sort.SliceStable(res.Candidates, func(i, j int) bool {
+		ri := senderEntityCandidateRank(res.Candidates[i].Source, res.Candidates[i].Kind)
+		rj := senderEntityCandidateRank(res.Candidates[j].Source, res.Candidates[j].Kind)
+		if ri == rj {
+			if res.Candidates[i].Score == res.Candidates[j].Score {
+				return res.Candidates[i].Display < res.Candidates[j].Display
+			}
+			return res.Candidates[i].Score > res.Candidates[j].Score
+		}
+		return ri > rj
+	})
+	res.Ambiguous = senderEntityAmbiguous(res.Candidates)
 	return res
+}
+
+func senderEntityCandidateKey(username, kind, source string) string {
+	scope := kind
+	if source == "room_exact" || kind == "room_member" {
+		scope = "room_member"
+	}
+	return strings.TrimSpace(username) + "\x00" + scope
+}
+
+func senderEntityCandidateRank(source, kind string) int {
+	switch source {
+	case "builtin":
+		return 120
+	case "direct":
+		return 115
+	case "exact":
+		return 110
+	case "room_exact":
+		return 105
+	case "entity_exact":
+		if kind == "room_member" {
+			return 102
+		}
+		return 100
+	case "search":
+		return 85
+	case "entity_fuzzy":
+		return 75
+	case "entity_vector":
+		return 55
+	default:
+		return 50
+	}
+}
+
+func senderEntityAmbiguous(candidates []semanticEntityCandidate) bool {
+	if len(candidates) <= 1 {
+		return false
+	}
+	first := candidates[0]
+	for _, item := range candidates[1:] {
+		if item.Username == first.Username {
+			continue
+		}
+		if senderEntityCandidateRank(first.Source, first.Kind)-senderEntityCandidateRank(item.Source, item.Kind) >= 20 {
+			continue
+		}
+		if first.Score > 0 && item.Score > 0 && first.Score-item.Score >= 0.08 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func looksLikeWechatUsername(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "wxid_") ||
+		strings.HasSuffix(s, "@chatroom") ||
+		strings.Contains(s, "@") ||
+		semanticWechatUsernamePattern.MatchString(s)
 }
 
 func senderMessageMatches(msg *model.Message, entity string, senderIDs map[string]struct{}) bool {
@@ -1745,6 +2147,9 @@ func senderMessageMatches(msg *model.Message, entity string, senderIDs map[strin
 	}
 	if entity == "我" || entity == "自己" || strings.EqualFold(entity, "me") {
 		return msg.IsSelf
+	}
+	if _, ok := senderIDs["self"]; ok && msg.IsSelf {
+		return true
 	}
 	if _, ok := senderIDs[msg.Sender]; ok {
 		return true
@@ -1777,6 +2182,14 @@ func labelOrKey(label, key string) string {
 	return key
 }
 
+func parseIntDefault(raw string, fallback int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
 func (s *Service) ensureSemanticIndexReady() error {
 	if s.semantic == nil {
 		return fmt.Errorf("semantic manager unavailable")
@@ -1802,10 +2215,261 @@ func summarizeTopics(msgs []*model.Message, topN int) []map[string]any {
 		}
 		txt := semantic.NormalizeMessageText(m)
 		if txt != "" {
+			txt = stripMentionsForTopics(txt)
 			texts = append(texts, txt)
 		}
 	}
 	return topWords(texts, topN)
+}
+
+type llmTopicExtraction struct {
+	Topics []llmTopicItem `json:"topics"`
+}
+
+type llmTopicItem struct {
+	Topic        string   `json:"topic"`
+	Aliases      []string `json:"aliases"`
+	SupportCount int      `json:"support_count"`
+	Reason       string   `json:"reason"`
+}
+
+func (s *Service) extractDashboardTopicsWithLLM(ctx context.Context, msgs []*model.Message, topN int) ([]map[string]any, error) {
+	if s.semantic == nil {
+		return nil, fmt.Errorf("semantic manager unavailable")
+	}
+	if topN <= 0 {
+		topN = 30
+	}
+	rawMessages := dashboardSummaryMessageRows(msgs, 320)
+	if len(rawMessages) == 0 {
+		return nil, nil
+	}
+	payload := gin.H{
+		"total_message_count": len(msgs),
+		"sample_count":        len(rawMessages),
+		"sampled":             len(rawMessages) < len(msgs),
+		"messages":            rawMessages,
+	}
+	instruction := fmt.Sprintf(`请从 messages 中抽取最多 %d 个中文热点主题，完成中文分词、同义归并和噪声过滤。
+要求：
+- 主题必须是有业务或语义价值的短语，不要输出“图片/视频/文件/pdf/日期/头像/聊天记录/合并转发”等媒体或格式词。
+- 不要输出纯数字、无意义英文、单字词、URL、文件后缀、@昵称。
+- aliases 放可用于匹配原文的同义词或原始表达，最多 5 个。
+- support_count 是该主题在样本中被多少条消息支持的估计值，必须是整数。
+- reason 用一句话说明主题依据。
+- 只能输出 JSON：{"topics":[{"topic":"...","aliases":["..."],"support_count":3,"reason":"..."}]}`, topN)
+
+	sumCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
+	raw, err := s.semantic.AnalyzeJSON(sumCtx, "仪表盘热点主题抽取", toJSONString(payload), instruction)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := parseLLMTopicExtraction(raw)
+	if err != nil {
+		return nil, err
+	}
+	return rankLLMTopicsByMessages(parsed.Topics, msgs, topN), nil
+}
+
+func parseLLMTopicExtraction(raw string) (llmTopicExtraction, error) {
+	var out llmTopicExtraction
+	raw = strings.TrimSpace(raw)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start >= 0 && end > start {
+		raw = raw[start : end+1]
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func rankLLMTopicsByMessages(items []llmTopicItem, msgs []*model.Message, topN int) []map[string]any {
+	seen := map[string]struct{}{}
+	type rankedTopic struct {
+		Topic     string
+		Count     int
+		Reason    string
+		CountMode string
+	}
+	ranked := make([]rankedTopic, 0, len(items))
+	for _, item := range items {
+		topic := cleanLLMTopicLabel(item.Topic)
+		if topic == "" {
+			continue
+		}
+		key := strings.ToLower(topic)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		terms := append([]string{topic}, item.Aliases...)
+		count := countTopicSupportMessages(msgs, terms)
+		countMode := "full_text_match"
+		if count <= 0 && item.SupportCount > 0 {
+			count = item.SupportCount
+			countMode = "llm_sample_estimate"
+		}
+		if count <= 0 {
+			continue
+		}
+		ranked = append(ranked, rankedTopic{
+			Topic:     topic,
+			Count:     count,
+			Reason:    strings.TrimSpace(item.Reason),
+			CountMode: countMode,
+		})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].Count == ranked[j].Count {
+			return ranked[i].Topic < ranked[j].Topic
+		}
+		return ranked[i].Count > ranked[j].Count
+	})
+	if topN > 0 && len(ranked) > topN {
+		ranked = ranked[:topN]
+	}
+	out := make([]map[string]any, 0, len(ranked))
+	for _, item := range ranked {
+		row := map[string]any{
+			"topic":      item.Topic,
+			"count":      item.Count,
+			"source":     "llm",
+			"count_mode": item.CountMode,
+		}
+		if item.Reason != "" {
+			row["reason"] = item.Reason
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func cleanLLMTopicLabel(topic string) string {
+	topic = strings.Trim(strings.TrimSpace(topic), " /\\|_-·~：:，,。.!！?？#*`\"'")
+	if topic == "" {
+		return ""
+	}
+	runes := []rune(topic)
+	if len(runes) < 2 || len(runes) > 32 {
+		return ""
+	}
+	if strings.HasPrefix(topic, "@") || strings.Contains(topic, "http") {
+		return ""
+	}
+	if !isUsefulTopicToken(topic) {
+		return ""
+	}
+	return topic
+}
+
+func countTopicSupportMessages(msgs []*model.Message, terms []string) int {
+	cleanTerms := make([]string, 0, len(terms))
+	for _, term := range terms {
+		term = strings.ToLower(strings.TrimSpace(term))
+		if term == "" || !isUsefulTopicToken(term) {
+			continue
+		}
+		cleanTerms = append(cleanTerms, term)
+	}
+	if len(cleanTerms) == 0 {
+		return 0
+	}
+	count := 0
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		text := strings.ToLower(stripMentionsForTopics(semantic.NormalizeMessageText(msg)))
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		for _, term := range cleanTerms {
+			if strings.Contains(text, term) {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
+func summarizeMentions(msgs []*model.Message, topN int) []map[string]any {
+	counter := map[string]int{}
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		txt := semantic.NormalizeMessageText(m)
+		for _, name := range extractMentions(txt) {
+			counter[name]++
+		}
+	}
+	type kv struct {
+		Key string
+		Val int
+	}
+	rows := make([]kv, 0, len(counter))
+	for k, v := range counter {
+		rows = append(rows, kv{k, v})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Val > rows[j].Val })
+	if topN <= 0 {
+		topN = 10
+	}
+	if len(rows) > topN {
+		rows = rows[:topN]
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, item := range rows {
+		out = append(out, map[string]any{
+			"name":  item.Key,
+			"count": item.Val,
+		})
+	}
+	return out
+}
+
+func extractMentions(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	matches := semanticMentionRe.FindAllStringSubmatch(text, -1)
+	out := make([]string, 0, len(matches))
+	seen := map[string]struct{}{}
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		name := cleanMentionName(match[1])
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func stripMentionsForTopics(text string) string {
+	return semanticMentionRe.ReplaceAllString(text, " ")
+}
+
+func cleanMentionName(name string) string {
+	name = strings.Trim(strings.TrimSpace(name), " @\t\r\n，,。；;：:！!？?()（）[]【】<>《》\"'")
+	if name == "" {
+		return ""
+	}
+	if !isUsefulTopicToken(name) {
+		return ""
+	}
+	return name
 }
 
 func topWords(texts []string, topN int) []map[string]any {
@@ -1859,19 +2523,107 @@ func splitTopicTokens(text string) []string {
 		if len([]rune(part)) > 24 {
 			continue
 		}
+		if !isUsefulTopicToken(part) {
+			continue
+		}
 		out = append(out, part)
 	}
 	return out
+}
+
+func isUsefulTopicToken(token string) bool {
+	token = strings.Trim(strings.TrimSpace(strings.ToLower(token)), " /\\|_-·~：:，,。.!！?？")
+	if token == "" {
+		return false
+	}
+	if _, ok := semanticStopTopicTokens[token]; ok {
+		return false
+	}
+	if strings.HasPrefix(token, "http") || strings.HasPrefix(token, "www.") {
+		return false
+	}
+	if semanticASCIIAlnumTokenRe.MatchString(token) {
+		if _, ok := semanticAllowedASCIIKeywords[token]; ok {
+			return true
+		}
+		return false
+	}
+	if strings.ContainsAny(token, "0123456789") && !semanticHasCJKRe.MatchString(token) {
+		return false
+	}
+	if strings.Contains(token, "聊天记录") || strings.Contains(token, "合并转发") {
+		return false
+	}
+	return true
+}
+
+var semanticStopTopicTokens = map[string]struct{}{
+	"图片":          {},
+	"视频":          {},
+	"语音":          {},
+	"文件":          {},
+	"表情":          {},
+	"动画表情":        {},
+	"gif表情":       {},
+	"红包":          {},
+	"红包封面":        {},
+	"链接":          {},
+	"分享":          {},
+	"小程序":         {},
+	"公众号":         {},
+	"聊天记录":        {},
+	"合并转发":        {},
+	"合并转发群聊的聊天记录": {},
+	"日期":          {},
+	"头像":          {},
+	"pdf":         {},
+	"doc":         {},
+	"docx":        {},
+	"xls":         {},
+	"xlsx":        {},
+	"ppt":         {},
+	"pptx":        {},
+	"zip":         {},
+	"rar":         {},
+	"jpg":         {},
+	"jpeg":        {},
+	"png":         {},
+	"gif":         {},
+	"mp4":         {},
+	"mov":         {},
+	"mp3":         {},
+	"m4a":         {},
+	"silk":        {},
+	"txt":         {},
+	"csv":         {},
+	"dat":         {},
+}
+
+var semanticAllowedASCIIKeywords = map[string]struct{}{
+	"ai":  {},
+	"api": {},
+	"ios": {},
+	"mac": {},
+	"sql": {},
+	"glm": {},
 }
 
 func parseSemanticWindow(raw string) (string, string, time.Time, time.Time) {
 	now := time.Now()
 	loc := now.Location()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	raw = strings.TrimSpace(strings.ToLower(raw))
+	raw = normalizeSemanticWindowKey(raw)
+	if semanticDateWindowPattern.MatchString(raw) {
+		if day, err := time.ParseInLocation("2006-01-02", raw, loc); err == nil {
+			return raw, raw, day, day.AddDate(0, 0, 1).Add(-time.Nanosecond)
+		}
+	}
 	switch raw {
 	case "", "today", "1d":
 		return "today", "今天", todayStart, now
+	case "yesterday":
+		label, start, end := yesterdayWindow()
+		return "yesterday", label, start, end
 	case "7d", "week":
 		return "7d", "近7天", todayStart.AddDate(0, 0, -6), now
 	case "30d", "month", "1m":
@@ -1977,6 +2729,10 @@ func toJSONString(v any) string {
 }
 
 func (s *Service) summarizeSemantic(ctx context.Context, title string, payload any) (string, error) {
+	return s.summarizeSemanticWithTimeout(ctx, title, payload, 12*time.Second)
+}
+
+func (s *Service) summarizeSemanticWithTimeout(ctx context.Context, title string, payload any, timeout time.Duration) (string, error) {
 	if s.semantic == nil {
 		return "", nil
 	}
@@ -1984,7 +2740,10 @@ func (s *Service) summarizeSemantic(ctx context.Context, title string, payload a
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
-	sumCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	if timeout <= 0 {
+		timeout = 12 * time.Second
+	}
+	sumCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return s.semantic.Summarize(sumCtx, title, raw)
 }
@@ -1994,6 +2753,13 @@ func firstN[T any](items []T, n int) []T {
 		return items
 	}
 	return items[:n]
+}
+
+func lastN[T any](items []T, n int) []T {
+	if n <= 0 || len(items) <= n {
+		return items
+	}
+	return items[len(items)-n:]
 }
 
 func errorString(err error) string {

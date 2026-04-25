@@ -31,6 +31,7 @@ type SemanticConfig struct {
 	EnableQA            bool    `mapstructure:"enable_qa" json:"enable_qa"`
 	EnableTopics        bool    `mapstructure:"enable_topics" json:"enable_topics"`
 	EnableProfiles      bool    `mapstructure:"enable_profiles" json:"enable_profiles"`
+	EnableLLMChunk      bool    `mapstructure:"enable_llm_chunk" json:"enable_llm_chunk"`
 	RealtimeIndex       bool    `mapstructure:"realtime_index" json:"realtime_index"`
 	IndexWorkers        int     `mapstructure:"index_workers" json:"index_workers"`
 	RecallK             int     `mapstructure:"recall_k" json:"recall_k"`

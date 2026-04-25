@@ -110,6 +110,60 @@
             animation: cursorBlink 0.9s steps(2, start) infinite;
         }
 
+        .dashboard-summary-md {
+            font-size: 0.88rem;
+            color: var(--text-main);
+            line-height: 1.7;
+        }
+
+        .dashboard-summary-md h3,
+        .dashboard-summary-md h4,
+        .dashboard-summary-md h5 {
+            margin: 12px 0 6px;
+            color: var(--text-main);
+            line-height: 1.35;
+        }
+
+        .dashboard-summary-md h3 {
+            font-size: 1rem;
+        }
+
+        .dashboard-summary-md h4,
+        .dashboard-summary-md h5 {
+            font-size: 0.94rem;
+        }
+
+        .dashboard-summary-md p {
+            margin: 6px 0;
+        }
+
+        .dashboard-summary-md ul,
+        .dashboard-summary-md ol {
+            margin: 6px 0 8px 18px;
+            padding: 0;
+        }
+
+        .dashboard-summary-md li {
+            margin: 3px 0;
+        }
+
+        .dashboard-summary-md blockquote {
+            margin: 8px 0;
+            padding: 6px 10px;
+            border-left: 3px solid var(--primary);
+            background: #eff6ff;
+            color: var(--text-secondary);
+            border-radius: 6px;
+        }
+
+        .dashboard-summary-md code {
+            padding: 1px 5px;
+            border-radius: 5px;
+            background: #f3f4f6;
+            color: #b45309;
+            font-size: 0.85em;
+        }
+
         @keyframes cursorBlink {
             0%, 45% { opacity: 1; }
             46%, 100% { opacity: 0; }
@@ -1040,9 +1094,9 @@
                 </section>
             </div>
 
-            <!-- 全局数据概览 -->
+            <!-- 群聊数据概览 -->
             <div class="section-header">
-                <h2>全局数据概览</h2>
+                <h2>群聊数据概览</h2>
                 <div style="display:flex;align-items:center;gap:12px;">
                     <div class="time-range-tabs" id="dashboard-stats-range">
                         <button class="time-range-tab active" data-range="1d">今天</button>
@@ -1074,7 +1128,7 @@
                     <div class="overview-icon amber">📇</div>
                     <div class="overview-info">
                         <span class="overview-value" id="dashboard-ov-senders">-</span>
-                        <span class="overview-label">参与人数</span>
+                        <span class="overview-label">活跃成员(按群)</span>
                     </div>
                 </div>
                 <div class="overview-card">
@@ -1106,22 +1160,20 @@
                 </div>
             </div>
 
-            <!-- 各群消息类型对比 -->
+            <!-- 群聊对比图表 -->
             <div class="section-header">
-                <h2>各群消息类型对比</h2>
-                <span style="font-size:0.8rem;color:var(--text-secondary);">直观比较三类群聊的媒体结构差异</span>
+                <h2>群聊对比图表</h2>
+                <span style="font-size:0.8rem;color:var(--text-secondary);">合并消息类型结构与 24 小时活跃度，避免重复查看多个相似模块</span>
             </div>
-            <div class="analytics-panel" style="margin-bottom:24px;">
-                <div id="dashboard-cross-type-chart" class="chart-container wide" style="height:300px;"></div>
-            </div>
-
-            <!-- 24小时活跃度折线图 -->
-            <div class="section-header">
-                <h2>24 小时活跃度对比</h2>
-                <span style="font-size:0.8rem;color:var(--text-secondary);">三条线叠加展示各群作息差异</span>
-            </div>
-            <div class="analytics-panel" style="margin-bottom:24px;">
-                <div id="dashboard-cross-hour-chart" class="chart-container wide" style="height:320px;"></div>
+            <div class="analytics-grid" style="margin-bottom:24px;">
+                <section class="analytics-panel">
+                    <h3>消息类型结构</h3>
+                    <div id="dashboard-cross-type-chart" class="chart-container wide" style="height:300px;"></div>
+                </section>
+                <section class="analytics-panel">
+                    <h3>24 小时活跃度</h3>
+                    <div id="dashboard-cross-hour-chart" class="chart-container wide" style="height:300px;"></div>
+                </section>
             </div>
 
             <!-- 每日消息趋势 + 语义分析摘要 -->
@@ -1145,12 +1197,13 @@
                 <section class="analytics-panel">
                     <div class="analytics-title-row">
                         <div>
-                            <h3>语义分析摘要</h3>
-                            <p>近期热点话题与隐私提醒</p>
+                            <h3>热点摘要</h3>
+                            <p>基于原始消息统计；点击按钮后才调用 GLM 生成摘要</p>
                         </div>
+                        <button class="btn btn-secondary btn-sm" onclick="loadDashboardSemanticSummary()">生成摘要</button>
                     </div>
                     <div id="dashboard-semantic-summary-body">
-                        <div class="analytics-empty">加载中...</div>
+                        <div class="analytics-empty">热点摘要需要手动触发，避免每次进入仪表盘自动消耗 LLM 请求。</div>
                     </div>
                 </section>
             </div>
@@ -1202,14 +1255,13 @@
                     </div>
                     <div id="semantic-chat-thread" class="semantic-chat-thread">
                         <div class="semantic-message assistant">
-                            <div class="semantic-bubble">选择时间窗和数据源后直接提问。索引未完成时，问答会被禁用；请在下方“配置与索引管理”中查看或重建向量索引。</div>
+                            <div class="semantic-bubble">直接提问即可。右侧时间窗是默认范围；如果问题里写了“今天/昨天/4月23日/近一月”等时间，系统会自动覆盖默认范围。</div>
                         </div>
                     </div>
                     <div class="semantic-composer">
                         <textarea id="semantic-query" placeholder="输入问题，例如：近七天有哪些异常告警？Shift+Enter 换行，Enter 发送"></textarea>
                         <div class="actions" style="margin-top:10px;padding-top:10px;">
                             <button class="btn btn-primary" id="semantic-qa-btn" onclick="runSemanticQA()">发送</button>
-                            <button class="btn btn-secondary" id="semantic-search-btn" onclick="runSemanticSearch()">只检索证据</button>
                         </div>
                     </div>
                 </div>
@@ -1223,6 +1275,7 @@
                             <option value="30d">近1月</option>
                             <option value="all">全部</option>
                         </select>
+                        <div class="text-sm text-gray">作为默认时间范围；问题里的明确时间会优先。</div>
                     </div>
                     <div class="form-group" style="margin-top:12px;">
                         <label>最近会话数量</label>
@@ -1238,8 +1291,13 @@
                         <div id="semantic-source-list" class="semantic-source-list"><div class="text-gray text-sm">加载中...</div></div>
                     </div>
                     <div class="form-group" style="margin-top:12px;">
-                        <label>检索 TopN</label>
-                        <input type="number" id="semantic-limit" value="8" min="1" max="200">
+                        <label>检索深度</label>
+                        <select id="semantic-depth">
+                            <option value="standard" selected>标准（问答 8 条证据 / 检索 20 条）</option>
+                            <option value="deep">深入（问答 16 条证据 / 检索 50 条）</option>
+                            <option value="wide">广泛（问答 30 条证据 / 检索 100 条）</option>
+                        </select>
+                        <div class="text-sm text-gray">普通聊天无需手动设置 TopN；需要调参时在下方“配置与索引管理”修改专业参数。</div>
                     </div>
                     <div class="actions" style="margin-top:12px;padding-top:12px;">
                         <button class="btn btn-secondary btn-sm" onclick="loadSemanticSourceSessions()">刷新会话</button>
@@ -1296,6 +1354,8 @@
                             <div class="form-group"><label>向量维度</label><input type="number" id="semantic-embedding-dim" class="semantic-cfg" value="2048" min="256" max="2048"></div>
                             <div class="form-group"><label>并发线程数</label><input type="number" id="semantic-index-workers" class="semantic-cfg" value="4" min="1" max="32"></div>
                         </div>
+                        <label><input type="checkbox" id="semantic-enable-llm-chunk" class="semantic-cfg"> LLM Chunk 摘要</label>
+                        <div class="text-sm text-gray">重建索引时用 Chat Model 生成更高质量的 chunk 摘要和主题，召回更准但成本和耗时更高。</div>
                         <div class="text-sm text-gray">维度变更后需要重建索引；线程数越大构建越快但资源占用更高。</div>
                     </div>
 
@@ -1316,10 +1376,29 @@
                     <button class="btn btn-secondary" onclick="testSemanticConfig()">测试连通性</button>
                     <button class="btn btn-secondary" onclick="loadSemanticConfigAndStatus(true)">刷新状态</button>
                     <label class="text-sm" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="semantic-rebuild-reset"> 重建时从头开始</label>
+                    <button class="btn btn-secondary" id="semantic-pause-btn" onclick="pauseSemanticIndex()">暂停索引</button>
+                    <button class="btn btn-secondary" id="semantic-resume-btn" onclick="resumeSemanticIndex()">恢复索引</button>
                     <button class="btn btn-danger" onclick="clearSemanticIndex()">删除向量索引</button>
                     <button class="btn btn-secondary" onclick="rebuildSemanticIndex()">重建向量索引</button>
                 </div>
                 <div id="semantic-status" class="result-area" style="margin-top:12px;"></div>
+                <div class="result-area" style="margin-top:12px;">
+                    <div class="result-header">
+                        <strong>向量化内容可视化</strong>
+                        <span class="text-sm text-gray">展示入库文本、向量摘要和类型分布，不加载完整向量数组。</span>
+                    </div>
+                    <div class="actions">
+                        <select id="semantic-preview-kind">
+                            <option value="all">混合视图</option>
+                            <option value="message">消息向量</option>
+                            <option value="entity">实体向量</option>
+                            <option value="chunk">Chunk 向量</option>
+                        </select>
+                        <input type="number" id="semantic-preview-limit" value="20" min="1" max="100" style="max-width:110px;">
+                        <button class="btn btn-secondary" onclick="loadSemanticIndexPreview()">刷新预览</button>
+                    </div>
+                    <div id="semantic-index-preview" class="text-sm text-gray">点击“刷新预览”查看当前索引库中的向量化内容。</div>
+                </div>
                 <div class="actions">
                     <button class="btn btn-secondary" id="semantic-topics-btn" onclick="runSemanticTopics()">主题趋势</button>
                     <button class="btn btn-secondary" id="semantic-profiles-btn" onclick="runSemanticProfiles()">联系人画像</button>
@@ -1822,10 +1901,16 @@
         let semanticActiveAnswerId = '';
         let semanticActiveMetaId = '';
         let semanticActiveEvidenceId = '';
+        let semanticEntityOverride = '';
+        let semanticPreviewMapState = { yaw: -0.65, pitch: 0.45, dragging: false, lastX: 0, lastY: 0, items: [], kind: 'message' };
         let dashboardSessions = [];
         let dashboardGroupStats = [];
         let dashboardStatsRange = '1d';
         let dashboardTrendWindow = '30d';
+        let dashboardTrendCacheKey = '';
+        let dashboardTrendCachePromise = null;
+        let dashboardSummaryCacheKey = '';
+        let dashboardSummaryCachePromise = null;
         const dashboardCharts = {};
         const dashboardMsgTypeMap = {
             text: '1',
@@ -2346,14 +2431,20 @@
 	        function getDashboardTimeRange(kind) {
 	            const rangeSelect = document.getElementById(`dashboard-${kind}-range`);
 	            const val = rangeSelect ? String(rangeSelect.value || 'all') : 'all';
+	            return dashboardRangeToHistoryTime(val);
+	        }
+
+	        function dashboardRangeToHistoryTime(val) {
+	            val = String(val || 'all');
 	            if (val === 'all') return 'all';
 	            const now = new Date();
-	            const days = val === '90d' ? 90 : 30;
-	            const start = new Date(now.getTime() - days * 24 * 3600 * 1000);
 	            const pad = (v) => String(v).padStart(2, '0');
+	            const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+	            if (val === '1d') return today;
+	            const days = val === '7d' ? 6 : (val === '90d' ? 89 : (val === '1y' ? 364 : 29));
+	            const start = new Date(now.getTime() - days * 24 * 3600 * 1000);
 	            const s = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
-	            const e = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-	            return `${s}~${e}`;
+	            return `${s}~${today}`;
 	        }
 
 	        function getDashboardJumpMsgType(kind) {
@@ -2624,7 +2715,6 @@
             ].filter(item => item.value > 0);
 	            const selectedChat = String(data.username || '');
 	            const recentRankings = getRecentSessionRankings(kind, selectedChat);
-	            const otherGroupRankings = getRecentSessionRankings('group', selectedChat);
 	            const defaultJumpType = getDashboardJumpMsgType(kind);
 	            const defaultRange = getDashboardTimeRange(kind);
 
@@ -2680,18 +2770,6 @@
                             `).join('') : '<div class="analytics-empty">暂无排行数据</div>'}
                         </div>
                     </div>
-                    <div class="analytics-section">
-                        <h4>最近活跃群聊</h4>
-	                        <div class="bar-list">
-	                            ${otherGroupRankings.length ? otherGroupRankings.map(item => `
-	                                <div class="bar-row" style="grid-template-columns: 120px 1fr 80px;">
-	                                    <button class="analytics-link-btn" style="text-align:left; padding:4px 8px;" onclick="setChatlogFilters(decodeURIComponent('${encodeURIComponent(String(item.username || ''))}'), '', '群聊 ${escapeHtml(item.label)} 已跳转', decodeURIComponent('${encodeURIComponent(String(defaultJumpType || ''))}'), { timeRange: decodeURIComponent('${encodeURIComponent(String(defaultRange || ''))}') })">${escapeHtml(item.label)}</button>
-	                                    <div class="bar-track"><div class="bar-fill warning" style="width:100%"></div></div>
-	                                    <span class="bar-value">${escapeHtml(item.value)}</span>
-	                                </div>
-                            `).join('') : '<div class="analytics-empty">暂无其他活跃群聊</div>'}
-                        </div>
-                    </div>
                 `}
                 <div class="analytics-section">
                     <h4>消息类型分布</h4>
@@ -2733,9 +2811,46 @@
             }
         }
 
+        function loadDashboardTrendData() {
+            const windowKey = getTrendWindowParam();
+            if (dashboardTrendCachePromise && dashboardTrendCacheKey === windowKey) {
+                return dashboardTrendCachePromise;
+            }
+            dashboardTrendCacheKey = windowKey;
+            dashboardTrendCachePromise = (async () => {
+                const res = await fetchWithTimeout('/api/v1/dashboard/trend?format=json&window=' + encodeURIComponent(windowKey) + '&summary=0', 45000);
+                if (!res.ok) throw new Error(await res.text());
+                return await res.json();
+            })();
+            return dashboardTrendCachePromise;
+        }
+
+        function loadDashboardSummaryData() {
+            const windowKey = getTrendWindowParam();
+            if (dashboardSummaryCachePromise && dashboardSummaryCacheKey === windowKey) {
+                return dashboardSummaryCachePromise;
+            }
+            dashboardSummaryCacheKey = windowKey;
+            dashboardSummaryCachePromise = (async () => {
+                const res = await fetchWithTimeout('/api/v1/dashboard/trend?format=json&window=' + encodeURIComponent(windowKey) + '&summary=1', 90000);
+                if (!res.ok) throw new Error(await res.text());
+                return await res.json();
+            })();
+            return dashboardSummaryCachePromise;
+        }
+
+        function resetDashboardTrendCache() {
+            dashboardTrendCacheKey = '';
+            dashboardTrendCachePromise = null;
+            dashboardSummaryCacheKey = '';
+            dashboardSummaryCachePromise = null;
+        }
+
         function setupDashboardTimeRange(containerId, stateKey, onChange) {
             const container = document.getElementById(containerId);
             if (!container) return;
+            if (container.dataset.bound === 'true') return;
+            container.dataset.bound = 'true';
             container.querySelectorAll('.time-range-tab').forEach(function(btn) {
                 btn.addEventListener('click', function() {
                     container.querySelectorAll('.time-range-tab').forEach(function(b) { b.classList.remove('active'); });
@@ -2745,6 +2860,7 @@
                         dashboardStatsRange = range;
                     } else {
                         dashboardTrendWindow = range;
+                        resetDashboardTrendCache();
                     }
                     if (typeof onChange === 'function') onChange(range);
                 });
@@ -2753,10 +2869,15 @@
 
         async function loadDashboardOverview() {
             try {
+                await refreshDashboardIndexCoverage();
                 const groups = dashboardSessions.filter(s => s.chat_type === 'group');
                 if (!groups.length) {
-                    document.getElementById('dashboard-overview-grid').innerHTML =
-                        '<div class="analytics-empty" style="grid-column:1/-1;">暂无群聊数据</div>';
+                    document.getElementById('dashboard-ov-msgs').textContent = '0';
+                    document.getElementById('dashboard-ov-groups').textContent = '0';
+                    document.getElementById('dashboard-ov-senders').textContent = '0';
+                    document.getElementById('dashboard-comparison-grid').innerHTML =
+                        '<div class="analytics-empty" style="grid-column:1/-1;">暂无群聊统计数据</div>';
+                    document.getElementById('dashboard-leaderboard-body').innerHTML = '<div class="analytics-empty">暂无发言数据</div>';
                     return;
                 }
                 const timeParam = getStatsTimeParam();
@@ -2773,27 +2894,12 @@
 
                 const totalMsgs = statsList.reduce((s, d) => s + (d.total || 0), 0);
                 const totalGroups = statsList.length;
-                const uniqueSenders = new Set();
-                statsList.forEach(d => {
-                    (d.top_senders || []).forEach(s => {
-                        if (s.sender && s.sender.trim()) uniqueSenders.add(s.sender.trim());
-                    });
-                });
+                const activeSenderSlots = statsList.reduce((s, d) => s + Number(d.active_senders || 0), 0);
 
                 document.getElementById('dashboard-ov-msgs').textContent = totalMsgs.toLocaleString();
                 document.getElementById('dashboard-ov-groups').textContent = totalGroups;
-                document.getElementById('dashboard-ov-senders').textContent = uniqueSenders.size;
-
-                try {
-                    const idxRes = await fetchWithTimeout('/api/v1/semantic/index/status');
-                    if (idxRes.ok) {
-                        const idx = await idxRes.json();
-                        document.getElementById('dashboard-ov-indexed').textContent =
-                            `${(idx.indexedcount || 0).toLocaleString()} 条`;
-                        document.getElementById('dashboard-ov-indexed').title =
-                            `已索引会话: ${idx.indexedtalkers || 0}/${idx.knowntalkers || 0}`;
-                    }
-                } catch (e) { document.getElementById('dashboard-ov-indexed').textContent = '-'; }
+                document.getElementById('dashboard-ov-senders').textContent = activeSenderSlots.toLocaleString();
+                document.getElementById('dashboard-ov-senders').title = '按群累加活跃发言成员；同一成员在多个群会重复计入。';
 
                 var rangeLabels = { '1d': '今天', '7d': '近7天', '30d': '近1月', '90d': '近季度', '1y': '近1年', 'all': '全部' };
                 document.getElementById('dashboard-overview-time').textContent =
@@ -2804,6 +2910,44 @@
                 renderDashboardCrossCharts(statsList);
             } catch (e) {
                 console.error('loadDashboardOverview error:', e);
+            }
+        }
+
+        async function refreshDashboardIndexCoverage() {
+            const el = document.getElementById('dashboard-ov-indexed');
+            if (!el) return;
+            el.textContent = '检测中';
+            el.title = '';
+            try {
+                const idxRes = await fetchWithTimeout('/api/v1/semantic/index/status?format=json');
+                if (!idxRes.ok) throw new Error(await idxRes.text());
+                const idx = await idxRes.json();
+                if (idx.error) {
+                    el.textContent = '不可用';
+                    el.title = idx.error;
+                    return;
+                }
+                if (!idx.enabled) {
+                    el.textContent = '未启用';
+                    el.title = 'GLM 语义功能未启用';
+                    return;
+                }
+                if (idx.running) {
+                    el.textContent = '构建中';
+                    el.title = `进度: ${Number(idx.processed || 0)}/${Number(idx.total || 0)}，失败 ${Number(idx.failed || 0)}`;
+                    return;
+                }
+                const indexed = Number(idx.indexed_count || 0);
+                if (indexed <= 0) {
+                    el.textContent = '未建立';
+                    el.title = `已索引会话: ${Number(idx.indexed_talkers || 0)}/${Number(idx.known_talkers || 0)}`;
+                    return;
+                }
+                el.textContent = `${indexed.toLocaleString()} 条`;
+                el.title = `已索引会话: ${Number(idx.indexed_talkers || 0)}/${Number(idx.known_talkers || 0)} | 未覆盖: ${Number(idx.unindexed_talkers || 0)} | 最近索引消息: ${idx.last_indexed_message_at || '-'}`;
+            } catch (e) {
+                el.textContent = '不可用';
+                el.title = String(e && e.message ? e.message : e || '');
             }
         }
 
@@ -2829,7 +2973,7 @@
                 const peakHour = (d.by_hour || []).reduce((a, b) => (a.count > b.count ? a : b), { hour: '?', count: 0 });
 
                 return `
-                <div class="comparison-card" onclick="setChatlogFilters(decodeURIComponent('${encodeURIComponent(d.username || '')}'), '', '群聊 ${escapeHtml(d.chat || '')} 已跳转', '', {})">
+                <div class="comparison-card" onclick="setChatlogFilters(decodeURIComponent('${encodeURIComponent(d.username || '')}'), '', '群聊 ${escapeHtml(d.chat || '')} 已跳转', '', { timeRange: decodeURIComponent('${encodeURIComponent(dashboardRangeToHistoryTime(dashboardStatsRange))}') })">
                     <h4 title="${escapeHtml(d.chat || d.username || '')}">${escapeHtml(d.chat || d.username || '')}</h4>
                     <div class="comparison-stats">
                         <div class="comparison-stat">
@@ -2971,10 +3115,7 @@
             try {
                 var trendEl = document.getElementById('dashboard-daily-trend-chart');
                 if (!trendEl) return;
-                var windowKey = getTrendWindowParam();
-                var res = await fetchWithTimeout('/api/v1/semantic/topics?format=json&window=' + encodeURIComponent(windowKey));
-                if (!res.ok) throw new Error(await res.text());
-                var topics = await res.json();
+                var topics = await loadDashboardTrendData();
                 var daily = Array.isArray(topics.daily) ? topics.daily : [];
                 if (daily.length === 0) {
                     trendEl.innerHTML = '<div class="analytics-empty">暂无每日趋势数据</div>';
@@ -3007,7 +3148,7 @@
                 }
             } catch (e) {
                 var trendEl = document.getElementById('dashboard-daily-trend-chart');
-                if (trendEl) trendEl.innerHTML = '<div class="analytics-empty">趋势数据加载失败</div>';
+                if (trendEl) trendEl.innerHTML = '<div class="analytics-empty">趋势数据加载失败: ' + escapeHtml(String(e && e.message ? e.message : e || '')) + '</div>';
             }
         }
 
@@ -3015,10 +3156,8 @@
             try {
                 var body = document.getElementById('dashboard-semantic-summary-body');
                 if (!body) return;
-                var windowKey = getTrendWindowParam();
-                var res = await fetchWithTimeout('/api/v1/semantic/topics?format=json&window=' + encodeURIComponent(windowKey));
-                if (!res.ok) throw new Error(await res.text());
-                var topics = await res.json();
+                body.innerHTML = '<div class="analytics-empty">LLM 正在生成热点摘要...</div>';
+                var topics = await loadDashboardSummaryData();
 
                 var topicList = Array.isArray(topics.topics) ? topics.topics : [];
                 var filteredTopics = topicList
@@ -3026,23 +3165,46 @@
                     .slice(0, 15);
                 var maxCount = filteredTopics.length ? filteredTopics[0].count : 1;
 
-                var summary = (topics.summary || '').replace(/\n/g, '<br>');
-                var hasPrivacy = summary.indexOf('隐私') >= 0 || summary.indexOf('手机') >= 0 || summary.indexOf('敏感') >= 0;
+                var summaryText = topics.summary || '';
+                if (!summaryText) {
+                    summaryText = 'LLM 摘要生成失败或未配置模型。当前范围内共统计 ' + Number(topics.count || 0) + ' 条消息。下方为基于原始消息文本抽取的高频主题词。';
+                }
+                var summary = renderSafeMarkdown(summaryText);
+                var plainSummary = String(summaryText);
+                var hasPrivacy = plainSummary.indexOf('隐私') >= 0 || plainSummary.indexOf('手机') >= 0 || plainSummary.indexOf('敏感') >= 0;
 
                 var topicTagsHtml = filteredTopics.length ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">' +
                     filteredTopics.map(function(t) {
                         var size = 0.7 + (t.count / maxCount) * 0.6;
                         return '<span style="font-size:' + size.toFixed(2) + 'rem;color:var(--text-main);background:#f3f4f6;padding:2px 8px;border-radius:999px;">' + escapeHtml(t.topic) + ' (' + t.count + ')</span>';
                     }).join('') + '</div>' : '';
+                var mentionList = Array.isArray(topics.mentions) ? topics.mentions.slice(0, 10) : [];
+                var mentionHtml = mentionList.length ? '<div style="margin-top:12px;"><strong class="text-sm">被 @ 最多</strong><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">' +
+                    mentionList.map(function(m) {
+                        return '<span style="font-size:0.82rem;color:#92400e;background:#fef3c7;padding:2px 8px;border-radius:999px;">@' + escapeHtml(m.name || '') + ' (' + Number(m.count || 0) + ')</span>';
+                    }).join('') + '</div></div>' : '';
+                var topicSource = topics.topics_source === 'llm' ? 'LLM 主题归并' : '本地分词兜底';
+                var topicSourceHtml = '<div class="text-sm text-gray" style="margin-top:8px;">主题来源: ' + escapeHtml(topicSource) + '</div>';
 
                 body.innerHTML = (hasPrivacy ? '<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:10px;margin-bottom:12px;font-size:0.84rem;">\u26A0\uFE0F <strong>隐私提醒：</strong>检测到聊天中可能包含手机号码等敏感个人信息，请注意保护。</div>' : '') +
-                    '<div style="font-size:0.88rem;color:var(--text-main);line-height:1.6;">' + summary + '</div>' +
+                    '<div class="dashboard-summary-md">' + summary + '</div>' +
+                    (topics.summary_error ? '<div class="text-danger text-sm" style="margin-top:8px;">LLM 摘要错误: ' + escapeHtml(topics.summary_error) + '</div>' : '') +
+                    (topics.topics_error ? '<div class="text-danger text-sm" style="margin-top:8px;">LLM 主题抽取失败，已使用本地兜底: ' + escapeHtml(topics.topics_error) + '</div>' : '') +
+                    mentionHtml +
+                    topicSourceHtml +
                     topicTagsHtml +
                     '<div style="margin-top:12px;font-size:0.78rem;color:var(--text-secondary);">统计范围: ' + escapeHtml(topics.from || '?') + ' - ' + escapeHtml(topics.to || '?') + ' | 消息数: ' + (topics.count || 0) + '</div>';
             } catch (e) {
                 var body = document.getElementById('dashboard-semantic-summary-body');
-                if (body) body.innerHTML = '<div class="analytics-empty">语义分析摘要加载失败</div>';
+                if (body) body.innerHTML = '<div class="analytics-empty">热点摘要加载失败: ' + escapeHtml(String(e && e.message ? e.message : e || '')) + '</div>';
             }
+        }
+
+        function resetDashboardSemanticSummaryPrompt() {
+            var body = document.getElementById('dashboard-semantic-summary-body');
+            if (!body) return;
+            var labels = { '1d': '今天', '7d': '近7天', '30d': '近1月', '90d': '近季度', '1y': '近1年', 'all': '全部' };
+            body.innerHTML = '<div class="analytics-empty">当前热点摘要时间窗：' + escapeHtml(labels[dashboardTrendWindow] || dashboardTrendWindow || '-') + '。点击“生成摘要”后开始统计并调用 GLM。</div>';
         }
 
 
@@ -3111,7 +3273,7 @@
                 });
                 setupDashboardTimeRange('dashboard-trend-range', 'trend', function() {
                     loadDashboardDailyTrend();
-                    loadDashboardSemanticSummary();
+                    resetDashboardSemanticSummaryPrompt();
                 });
                 const privateSelect = document.getElementById('dashboard-private-select');
                 const groupSelect = document.getElementById('dashboard-group-select');
@@ -3123,7 +3285,7 @@
                 else document.getElementById('dashboard-group-body').innerHTML = '<div class="analytics-empty">暂无群聊会话</div>';
 		        loadDashboardOverview();
                 loadDashboardDailyTrend();
-                loadDashboardSemanticSummary();
+                resetDashboardSemanticSummaryPrompt();
 	            } catch (e) {
 	                renderDashboardLoadError('private', e);
 	                renderDashboardLoadError('group', e);
@@ -3384,6 +3546,7 @@
                 enable_qa: true,
                 enable_topics: true,
                 enable_profiles: true,
+                enable_llm_chunk: !!document.getElementById('semantic-enable-llm-chunk').checked,
                 realtime_index: true,
                 index_workers: parseInt(document.getElementById('semantic-index-workers').value, 10) || 4,
                 recall_k: parseInt(document.getElementById('semantic-recall-k').value, 10) || 80,
@@ -3457,6 +3620,22 @@
             };
         }
 
+        function semanticRetrievalDepth() {
+            return document.getElementById('semantic-depth')?.value || 'standard';
+        }
+
+        function semanticDepthLimit(kind) {
+            const depth = semanticRetrievalDepth();
+            if (kind === 'search') {
+                if (depth === 'wide') return 100;
+                if (depth === 'deep') return 50;
+                return 20;
+            }
+            if (depth === 'wide') return 30;
+            if (depth === 'deep') return 16;
+            return 8;
+        }
+
         function appendSemanticMessage(role, html) {
             const thread = document.getElementById('semantic-chat-thread');
             if (!thread) return null;
@@ -3492,6 +3671,7 @@
             document.getElementById('semantic-enable-qa').checked = true;
             document.getElementById('semantic-enable-topics').checked = true;
             document.getElementById('semantic-enable-profiles').checked = true;
+            document.getElementById('semantic-enable-llm-chunk').checked = !!data.enable_llm_chunk;
             document.getElementById('semantic-realtime-index').checked = true;
             document.getElementById('semantic-index-workers').value = data.index_workers || 4;
             document.getElementById('semantic-recall-k').value = data.recall_k || 80;
@@ -3527,6 +3707,7 @@
             if (!box) return;
             const st = status || {};
             const indexReady = !!st.enabled && !st.running && (st.indexed_count || 0) > 0 && (st.pending || 0) === 0;
+            setSemanticIndexControls(st);
             const processed = Number(st.processed || 0);
             const failed = Number(st.failed || 0);
             const pending = Number(st.pending || 0);
@@ -3540,17 +3721,22 @@
             const indexBadge = indexReady
                 ? `<span class="badge" style="background:#e6f6ec;color:#1f8b4c;border:1px solid #bde7cc;">索引已就绪，可使用</span>`
                 : `<span class="badge" style="background:#fff7e6;color:#ad6800;border:1px solid #ffd591;">索引未就绪，功能不可用</span>`;
+            const pauseBadge = st.paused
+                ? `<span class="badge" style="background:#fff1f0;color:#a8071a;border:1px solid #ffa39e;">索引已暂停</span>`
+                : `<span class="badge" style="background:#f6ffed;color:#389e0d;border:1px solid #b7eb8f;">索引未暂停</span>`;
             box.innerHTML = `
                 <div class="result-header">
                     <strong>向量索引状态</strong>
                     ${okBadge}
+                    ${pauseBadge}
                 </div>
                 <div class="text-sm" style="margin-bottom:6px;">${indexBadge}</div>
-                <div class="text-sm">能力状态: ${st.enabled ? '已开启' : '未开启'} | 构建任务: ${st.running ? '运行中' : '空闲'} | 存储可用: ${st.ready ? '是' : '否'}</div>
-                <div class="text-sm">已索引消息: ${Number(st.indexed_count || 0)}</div>
+                <div class="text-sm">能力状态: ${st.enabled ? '已开启' : '未开启'} | 构建任务: ${st.running ? '运行中' : '空闲'} | 暂停状态: ${st.paused ? '已暂停' : '未暂停'} | 存储可用: ${st.ready ? '是' : '否'}</div>
+                <div class="text-sm">已索引消息: ${Number(st.indexed_count || 0)} | 实体索引: ${Number(st.entity_count || 0)} | Chunk 索引: ${Number(st.chunk_count || 0)}</div>
                 <div class="text-sm">索引覆盖会话: ${Number(st.indexed_talkers || 0)} / ${Number(st.known_talkers || 0)} | 未覆盖 ${Number(st.unindexed_talkers || 0)} | 最近索引消息: ${escapeHtml(st.last_indexed_message_at || '-')}</div>
                 <div class="text-sm">本次任务进度: 已完成 ${finished} / 总计 ${total} | 成功 ${processed} | 失败 ${failed} | 待处理 ${pending} | ${Number(st.progress_pct || 0).toFixed(2)}%</div>
                 <div class="text-sm">任务模式: ${escapeHtml(st.mode || '-')} | 更新时间: ${escapeHtml(st.updated_at || '-')}</div>
+                ${st.paused ? `<div class="text-sm">暂停模式: ${escapeHtml(st.paused_mode || '-')} | 暂停时间: ${escapeHtml(st.paused_at || '-')}</div>` : ''}
                 <div class="text-sm">增量更新: ${escapeHtml(st.last_incremental_at || '-')} | 新增索引 ${Number(st.last_incremental_added || 0)}</div>
                 <div class="text-sm">重排序: ${escapeHtml(st.last_rerank_at || '-')} | 最近是否应用 ${st.last_rerank_applied ? '是' : '否'}</div>
                 <div class="text-sm">当前处理: ${escapeHtml(st.current_talker || '-')}</div>
@@ -3563,8 +3749,22 @@
             `;
         }
 
+        function setSemanticIndexControls(status) {
+            const st = status || {};
+            const pauseBtn = document.getElementById('semantic-pause-btn');
+            const resumeBtn = document.getElementById('semantic-resume-btn');
+            if (pauseBtn) {
+                pauseBtn.disabled = !!st.paused;
+                pauseBtn.style.opacity = st.paused ? '0.5' : '1';
+            }
+            if (resumeBtn) {
+                resumeBtn.disabled = !st.paused;
+                resumeBtn.style.opacity = st.paused ? '1' : '0.5';
+            }
+        }
+
         function setSemanticActionEnabled(enabled) {
-            ['semantic-search-btn', 'semantic-qa-btn', 'semantic-topics-btn', 'semantic-profiles-btn'].forEach((id) => {
+            ['semantic-qa-btn', 'semantic-topics-btn', 'semantic-profiles-btn'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 el.disabled = !enabled;
@@ -3708,6 +3908,364 @@
             }
         }
 
+        async function pauseSemanticIndex() {
+            try {
+                const res = await fetch('/api/v1/semantic/index/pause?format=json', { method: 'POST' });
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                renderSemanticStatus(data.status || {});
+                await loadSemanticConfigAndStatus(true);
+            } catch (e) {
+                alert(`暂停失败: ${e.message}`);
+            }
+        }
+
+        async function resumeSemanticIndex() {
+            try {
+                const res = await fetch('/api/v1/semantic/index/resume?format=json', { method: 'POST' });
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                renderSemanticStatus(data.status || {});
+                await loadSemanticConfigAndStatus(true);
+            } catch (e) {
+                alert(`恢复失败: ${e.message}`);
+            }
+        }
+
+        async function loadSemanticIndexPreview() {
+            const box = document.getElementById('semantic-index-preview');
+            if (!box) return;
+            const kind = document.getElementById('semantic-preview-kind')?.value || 'message';
+            const limit = Math.max(1, Math.min(100, Number(document.getElementById('semantic-preview-limit')?.value || 20)));
+            box.innerHTML = '<div class="text-sm text-gray">正在加载索引内容...</div>';
+            try {
+                const params = new URLSearchParams({ kind, limit: String(limit), format: 'json' });
+                const res = await fetch(`/api/v1/semantic/index/preview?${params.toString()}`);
+                if (!res.ok) throw new Error(await res.text());
+                renderSemanticIndexPreview(await res.json());
+            } catch (e) {
+                box.innerHTML = `<div class="text-danger">索引预览加载失败: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function renderSemanticIndexPreview(data) {
+            const box = document.getElementById('semantic-index-preview');
+            if (!box) return;
+            const groups = Array.isArray(data.groups) ? data.groups : [];
+            const items = Array.isArray(data.items) ? data.items : [];
+            const outliers = Array.isArray(data.outliers) ? data.outliers : [];
+            const maxGroup = groups.reduce((m, g) => Math.max(m, Number(g.count || 0)), 0) || 1;
+            const groupHtml = groups.length ? `
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:8px 0 12px;">
+                    ${groups.map(g => {
+                        const pct = Math.max(2, Number(g.count || 0) * 100 / maxGroup);
+                        return `<div style="border:1px solid var(--border);border-radius:8px;padding:8px;background:#fff;">
+                            <div style="display:flex;justify-content:space-between;gap:8px;"><span>${escapeHtml(previewGroupName(data.kind, g.name))}</span><strong>${Number(g.count || 0)}</strong></div>
+                            <div style="height:6px;background:#eef2f7;border-radius:999px;margin-top:6px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:#2563eb;"></div></div>
+                        </div>`;
+                    }).join('')}
+                </div>` : '<div class="text-sm text-gray">暂无分布统计。</div>';
+            const rowsHtml = items.length ? items.map(item => renderSemanticPreviewItem(item, data.kind)).join('') : '<div class="text-sm text-gray">暂无索引内容。</div>';
+            box.innerHTML = `
+                <div class="text-sm">类型: ${escapeHtml(data.kind || '-')} | 模型: ${escapeHtml(data.model || '-')} | 维度: ${Number(data.dim || 0)} | 总数: ${Number(data.total || 0)} | 展示: ${items.length}</div>
+                ${groupHtml}
+                <div style="margin:10px 0 12px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,#f8fafc,#ffffff);padding:10px;">
+                    <div class="text-sm text-gray" style="margin-bottom:8px;">3D 语义空间投影：拖拽旋转，滚轮缩放。坐标是高维向量的确定性随机投影，仅用于观察相对分布。</div>
+                    <canvas id="semantic-preview-map" width="920" height="360" style="width:100%;height:360px;display:block;border-radius:10px;background:#0f172a;"></canvas>
+                    <div id="semantic-preview-map-tip" class="text-sm text-gray" style="margin-top:6px;">悬停点查看内容摘要。</div>
+                </div>
+                ${renderSemanticPreviewDiagnostics(items, outliers, data.kind || 'message')}
+                <div style="display:grid;gap:10px;">${rowsHtml}</div>
+            `;
+            initSemanticPreviewMap(items, data.kind || 'message');
+        }
+
+        function renderSemanticPreviewDiagnostics(items, outliers, kind) {
+            const outlierHtml = outliers.length ? outliers.map((item, idx) => `
+                <div style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
+                    <span class="badge">#${idx + 1}</span>
+                    <div><strong>${escapeHtml(previewItemTitle(item, kind))}</strong><div class="text-sm text-gray">离群分 ${Number(item.outlier_score || 0).toFixed(3)} · ${escapeHtml(String(item.content || '').slice(0, 120))}</div></div>
+                </div>
+            `).join('') : '<div class="text-sm text-gray">当前样本未发现明显离群点。</div>';
+            const trajectory = kind === 'chunk' ? semanticChunkTrajectorySummary(items) : '';
+            return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff;margin-bottom:12px;">
+                <strong>自动诊断</strong>
+                <div class="text-sm text-gray" style="margin-top:4px;">离群点按 3D 投影空间最近邻距离估算，仅用于发现疑似噪声、乱码或低信息索引。</div>
+                ${outlierHtml}
+                ${trajectory}
+            </div>`;
+        }
+
+        function semanticChunkTrajectorySummary(items) {
+            const byTalker = new Map();
+            (items || []).forEach(item => {
+                if (!item || !item.talker) return;
+                if (!byTalker.has(item.talker)) byTalker.set(item.talker, []);
+                byTalker.get(item.talker).push(item);
+            });
+            const rows = Array.from(byTalker.entries())
+                .map(([talker, list]) => {
+                    list.sort((a, b) => Number(a.start_seq || 0) - Number(b.start_seq || 0));
+                    let dist = 0;
+                    for (let i = 1; i < list.length; i++) {
+                        dist += Math.hypot(Number(list[i].x || 0) - Number(list[i - 1].x || 0), Number(list[i].y || 0) - Number(list[i - 1].y || 0), Number(list[i].z || 0) - Number(list[i - 1].z || 0));
+                    }
+                    return { talker, count: list.length, dist };
+                })
+                .filter(row => row.count > 1)
+                .sort((a, b) => b.dist - a.dist)
+                .slice(0, 5);
+            if (!rows.length) return '';
+            return `<div style="margin-top:10px;"><strong class="text-sm">Chunk 时间轨迹</strong>${rows.map(row => `<div class="text-sm text-gray">${escapeHtml(row.talker)} · ${row.count} 个点 · 轨迹跨度 ${row.dist.toFixed(3)}</div>`).join('')}</div>`;
+        }
+
+        function renderSemanticPreviewItem(item, kind) {
+            const title = previewItemTitle(item, kind);
+            const meta = previewItemMeta(item, kind);
+            const bars = renderVectorBars(item.vector_sample || []);
+            return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff;">
+                <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+                    <strong>${escapeHtml(title)}</strong>
+                    <span class="badge">norm ${Number(item.vector_norm || 0).toFixed(3)}</span>
+                </div>
+                <div class="text-sm text-gray" style="margin-top:4px;">${escapeHtml(meta)}</div>
+                <div style="margin-top:8px;white-space:pre-wrap;">${escapeHtml(item.content || '')}</div>
+                <div style="margin-top:8px;">${bars}</div>
+            </div>`;
+        }
+
+        function previewItemTitle(item, kind) {
+            if (kind === 'entity') return `${item.entity_type || 'entity'} · ${item.display || item.username || '-'}`;
+            if (kind === 'chunk') return `${item.chunk_type || 'chunk'} · ${item.talker || '-'} · ${item.start_seq || '-'}~${item.end_seq || '-'}`;
+            return `${item.talker || '-'} · seq ${item.seq || '-'}`;
+        }
+
+        function previewItemMeta(item, kind) {
+            const dim = `dim=${item.dim || 0}`;
+            if (kind === 'entity') return `${dim} | username=${item.username || '-'} | scope=${item.scope_talker || '-'}`;
+            if (kind === 'chunk') return `${dim} | ${formatTimestamp(item.start_time)} ~ ${formatTimestamp(item.end_time)}`;
+            return `${dim} | sender=${item.sender || '-'} | ${formatTimestamp(item.time)} | msg_type=${item.entity_type || '-'}`;
+        }
+
+        function previewGroupName(kind, name) {
+            if (kind === 'message') {
+                const map = { '1': '文本', '3': '图片', '34': '语音', '43': '视频', '47': '表情', '49': '分享/文件' };
+                return map[String(name)] || `类型 ${name}`;
+            }
+            if (kind === 'entity') {
+                const map = { contact: '联系人', chatroom: '群聊', room_member: '群成员' };
+                return map[String(name)] || name;
+            }
+            if (kind === 'chunk') {
+                const map = { session: '会话片段', summary: '时间段摘要', topic: '主题片段' };
+                return map[String(name)] || name;
+            }
+            return name;
+        }
+
+        function renderVectorBars(values) {
+            if (!Array.isArray(values) || !values.length) return '<div class="text-sm text-gray">无向量样本</div>';
+            const maxAbs = values.reduce((m, v) => Math.max(m, Math.abs(Number(v || 0))), 0) || 1;
+            return `<div style="display:flex;gap:3px;align-items:flex-end;height:44px;">${values.map((v, i) => {
+                const num = Number(v || 0);
+                const h = Math.max(2, Math.abs(num) * 42 / maxAbs);
+                const color = num >= 0 ? '#2563eb' : '#dc2626';
+                return `<div title="#${i + 1}: ${num.toFixed(4)}" style="width:10px;height:${h}px;background:${color};border-radius:3px 3px 0 0;opacity:.85;"></div>`;
+            }).join('')}</div>`;
+        }
+
+        function initSemanticPreviewMap(items, kind) {
+            const canvas = document.getElementById('semantic-preview-map');
+            if (!canvas) return;
+            semanticPreviewMapState.items = Array.isArray(items) ? items : [];
+            semanticPreviewMapState.kind = kind || 'message';
+            semanticPreviewMapState.zoom = semanticPreviewMapState.zoom || 1;
+            const resize = () => {
+                const rect = canvas.getBoundingClientRect();
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = Math.max(320, Math.floor(rect.width * dpr));
+                canvas.height = Math.max(240, Math.floor(rect.height * dpr));
+                drawSemanticPreviewMap();
+            };
+            resize();
+            canvas.onmousedown = (e) => {
+                semanticPreviewMapState.dragging = true;
+                semanticPreviewMapState.lastX = e.clientX;
+                semanticPreviewMapState.lastY = e.clientY;
+            };
+            canvas.onmousemove = (e) => {
+                if (semanticPreviewMapState.dragging) {
+                    const dx = e.clientX - semanticPreviewMapState.lastX;
+                    const dy = e.clientY - semanticPreviewMapState.lastY;
+                    semanticPreviewMapState.yaw += dx * 0.008;
+                    semanticPreviewMapState.pitch += dy * 0.008;
+                    semanticPreviewMapState.pitch = Math.max(-1.35, Math.min(1.35, semanticPreviewMapState.pitch));
+                    semanticPreviewMapState.lastX = e.clientX;
+                    semanticPreviewMapState.lastY = e.clientY;
+                    drawSemanticPreviewMap();
+                } else {
+                    updateSemanticPreviewMapTip(e);
+                }
+            };
+            canvas.onmouseup = () => { semanticPreviewMapState.dragging = false; };
+            canvas.onmouseleave = () => { semanticPreviewMapState.dragging = false; };
+            canvas.onwheel = (e) => {
+                e.preventDefault();
+                const z = semanticPreviewMapState.zoom || 1;
+                semanticPreviewMapState.zoom = Math.max(0.55, Math.min(2.4, z * (e.deltaY > 0 ? 0.92 : 1.08)));
+                drawSemanticPreviewMap();
+            };
+            drawSemanticPreviewMap();
+        }
+
+        function drawSemanticPreviewMap() {
+            const canvas = document.getElementById('semantic-preview-map');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+            const grad = ctx.createLinearGradient(0, 0, 0, h);
+            grad.addColorStop(0, '#0f172a');
+            grad.addColorStop(1, '#111827');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, w, h);
+            drawSemanticPreviewAxes(ctx, w, h);
+            const points = semanticPreviewProjectedPoints(w, h);
+            points.sort((a, b) => a.depth - b.depth);
+            if (semanticPreviewMapState.kind === 'chunk') {
+                drawSemanticPreviewTrajectories(ctx, points);
+            }
+            for (const p of points) {
+                ctx.beginPath();
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.alpha;
+                ctx.arc(p.sx, p.sy, p.r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = p.item && p.item.is_outlier ? 'rgba(248,113,113,.95)' : 'rgba(255,255,255,.28)';
+                ctx.lineWidth = p.item && p.item.is_outlier ? 2 : 1;
+                ctx.stroke();
+            }
+            ctx.fillStyle = 'rgba(226,232,240,.82)';
+            ctx.font = `${Math.max(11, Math.round(w / 90))}px sans-serif`;
+            ctx.fillText(`${semanticPreviewMapState.items.length} points · ${semanticPreviewMapState.kind}`, 14, 22);
+        }
+
+        function drawSemanticPreviewTrajectories(ctx, points) {
+            const byTalker = new Map();
+            points.forEach(p => {
+                const talker = p.item && p.item.talker;
+                if (!talker) return;
+                if (!byTalker.has(talker)) byTalker.set(talker, []);
+                byTalker.get(talker).push(p);
+            });
+            ctx.save();
+            ctx.strokeStyle = 'rgba(125,211,252,.32)';
+            ctx.lineWidth = 1.5;
+            byTalker.forEach(list => {
+                if (list.length < 2) return;
+                list.sort((a, b) => Number(a.item.start_seq || 0) - Number(b.item.start_seq || 0));
+                ctx.beginPath();
+                list.forEach((p, idx) => {
+                    if (idx === 0) ctx.moveTo(p.sx, p.sy);
+                    else ctx.lineTo(p.sx, p.sy);
+                });
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+
+        function drawSemanticPreviewAxes(ctx, w, h) {
+            const cx = w / 2;
+            const cy = h / 2;
+            ctx.strokeStyle = 'rgba(148,163,184,.22)';
+            ctx.lineWidth = 1;
+            for (let i = -2; i <= 2; i++) {
+                ctx.beginPath();
+                ctx.moveTo(cx + i * w * 0.12, h * 0.12);
+                ctx.lineTo(cx + i * w * 0.12, h * 0.88);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(w * 0.08, cy + i * h * 0.16);
+                ctx.lineTo(w * 0.92, cy + i * h * 0.16);
+                ctx.stroke();
+            }
+        }
+
+        function semanticPreviewProjectedPoints(w, h) {
+            const yaw = semanticPreviewMapState.yaw || 0;
+            const pitch = semanticPreviewMapState.pitch || 0;
+            const zoom = semanticPreviewMapState.zoom || 1;
+            const cy = Math.cos(yaw), sy = Math.sin(yaw);
+            const cp = Math.cos(pitch), sp = Math.sin(pitch);
+            const scale = Math.min(w, h) * 0.34 * zoom;
+            return (semanticPreviewMapState.items || []).map((item, idx) => {
+                const x0 = Number(item.x || 0);
+                const y0 = Number(item.y || 0);
+                const z0 = Number(item.z || 0);
+                const x1 = x0 * cy - z0 * sy;
+                const z1 = x0 * sy + z0 * cy;
+                const y1 = y0 * cp - z1 * sp;
+                const z2 = y0 * sp + z1 * cp;
+                const perspective = 1.8 / (2.4 - z2 * 0.45);
+                return {
+                    item,
+                    idx,
+                    sx: w / 2 + x1 * scale * perspective,
+                    sy: h / 2 - y1 * scale * perspective,
+                    depth: z2,
+                    r: Math.max(4, Math.min(11, 6 + z2 * 2)),
+                    alpha: Math.max(0.48, Math.min(0.96, 0.7 + z2 * 0.18)),
+                    color: semanticPreviewPointColor(item, semanticPreviewMapState.kind)
+                };
+            });
+        }
+
+        function semanticPreviewPointColor(item, kind) {
+            if (semanticPreviewMapState.kind === 'all') {
+                if (item.kind === 'entity') return '#38bdf8';
+                if (item.kind === 'chunk') return '#f97316';
+                return '#a78bfa';
+            }
+            if (kind === 'entity') {
+                const map = { contact: '#38bdf8', chatroom: '#f59e0b', room_member: '#22c55e' };
+                return map[item.entity_type] || '#a78bfa';
+            }
+            if (kind === 'chunk') {
+                const map = { session: '#60a5fa', summary: '#f97316', topic: '#14b8a6' };
+                return map[item.chunk_type] || '#e879f9';
+            }
+            const map = { '1': '#60a5fa', '3': '#22c55e', '34': '#f59e0b', '43': '#ef4444', '47': '#a78bfa', '49': '#14b8a6' };
+            return map[String(item.entity_type || '')] || '#cbd5e1';
+        }
+
+        function updateSemanticPreviewMapTip(e) {
+            const canvas = document.getElementById('semantic-preview-map');
+            const tip = document.getElementById('semantic-preview-map-tip');
+            if (!canvas || !tip) return;
+            const rect = canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            const x = (e.clientX - rect.left) * dpr;
+            const y = (e.clientY - rect.top) * dpr;
+            const points = semanticPreviewProjectedPoints(canvas.width, canvas.height).sort((a, b) => b.depth - a.depth);
+            let best = null;
+            let bestDist = Infinity;
+            for (const p of points) {
+                const d = Math.hypot(p.sx - x, p.sy - y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = p;
+                }
+            }
+            if (!best || bestDist > 16 * dpr) {
+                tip.innerHTML = '悬停点查看内容摘要。';
+                return;
+            }
+            const item = best.item || {};
+            tip.innerHTML = `<strong>${escapeHtml(previewItemTitle(item, semanticPreviewMapState.kind))}</strong> · x=${Number(item.x || 0).toFixed(2)}, y=${Number(item.y || 0).toFixed(2)}, z=${Number(item.z || 0).toFixed(2)}<div>${escapeHtml(String(item.content || '').slice(0, 180))}</div>`;
+        }
+
         async function clearSemanticIndex() {
             if (!confirm('确认删除全部向量索引？')) return;
             try {
@@ -3721,26 +4279,12 @@
             }
         }
 
-        async function runSemanticSearch() {
-            const query = document.getElementById('semantic-query').value.trim();
-            const limit = parseInt(document.getElementById('semantic-limit').value, 10) || 20;
-            if (!query) {
-                alert('请输入 query');
-                return;
-            }
-            const source = collectSemanticSource();
-            const params = new URLSearchParams({ query, limit: String(limit), rerank: '1', window: source.window, source_limit: String(source.source_limit) });
-            if (source.chat) params.set('chat', source.chat);
-            if (source.chats.length) params.set('chats', source.chats.join(','));
-            params.set('format', 'json');
-            await runSemanticAPI(`/api/v1/semantic/search?${params.toString()}`);
-        }
-
         async function runSemanticQA() {
             const input = document.getElementById('semantic-query');
             const query = input.value.trim();
             const source = collectSemanticSource();
-            const limit = parseInt(document.getElementById('semantic-limit').value, 10) || 8;
+            const depth = semanticRetrievalDepth();
+            const topN = semanticDepthLimit('qa');
             if (!query) {
                 alert('请输入 query');
                 return;
@@ -3752,6 +4296,8 @@
             }
             appendSemanticMessage('user', escapeHtml(query));
             input.value = '';
+            const entityOverride = semanticEntityOverride;
+            semanticEntityOverride = '';
             const streamId = `semantic-stream-${Date.now()}-${Math.random().toString(16).slice(2)}`;
             const messageId = appendSemanticMessage('assistant', `
                 <div class="text-sm text-gray" id="${streamId}-meta">正在按最近会话和时间窗检索证据...</div>
@@ -3770,8 +4316,10 @@
                         chat: source.chat,
                         chats: source.chats,
                         window: source.window,
+                        entity_override: entityOverride,
+                        retrieval_depth: depth,
                         source_limit: source.source_limit,
-                        top_n: limit,
+                        top_n: topN,
                         history: semanticQAHistory.slice(-6)
                     })
                 });
@@ -3791,10 +4339,19 @@
         function clearSemanticQAHistory() {
             semanticQAHistory = [];
             semanticQAHistoryChat = '';
+            semanticEntityOverride = '';
             const thread = document.getElementById('semantic-chat-thread');
             if (thread) {
                 thread.innerHTML = '<div class="semantic-message assistant"><div class="semantic-bubble">对话已清空。继续提问时会重新按当前数据源检索。</div></div>';
             }
+        }
+
+        function useSemanticEntityCandidate(encodedUsername, encodedDisplay) {
+            semanticEntityOverride = decodeURIComponent(encodedUsername || '').trim();
+            const display = decodeURIComponent(encodedDisplay || '').trim() || semanticEntityOverride;
+            const input = document.getElementById('semantic-query');
+            if (input) input.focus();
+            appendSemanticMessage('assistant', `已选择实体：<strong>${escapeHtml(display)}</strong><div class="text-sm text-gray">下一次提问会使用 username=${escapeHtml(semanticEntityOverride)} 精确过滤发送者。</div>`);
         }
 
         async function readSemanticQAStream(res) {
@@ -3868,7 +4425,7 @@
                 const debugText = dbg.intent
                     ? ` | intent=${escapeHtml(dbg.intent)} | mode=${escapeHtml(dbg.answer_mode || '-')} | route=${escapeHtml(dbg.source || '-')}/${escapeHtml(dbg.retrieval || '-')}${dbg.entity ? ` | entity=${escapeHtml(dbg.entity)}` : ''}${dbg.topic ? ` | topic=${escapeHtml(dbg.topic)}` : ''}${dbg.entity_candidate_count ? ` | candidates=${Number(dbg.entity_candidate_count || 0)}${dbg.entity_ambiguous ? '(歧义)' : ''}` : ''}${dbg.empty_reason ? ` | reason=${escapeHtml(dbg.empty_reason)}` : ''}`
                     : '';
-                meta.innerHTML = `数据源会话: ${Number(data.source_count || 0)} | 时间窗: ${escapeHtml(data.window || 'all')} | 证据数: ${Number(data.count || 0)} | rerank: ${data.rerank_applied ? '已应用' : (data.rerank_tried ? '未应用' : '未尝试')}${debugText}${data.rerank_error ? ` | <span class="text-danger">${escapeHtml(data.rerank_error)}</span>` : ''}`;
+                meta.innerHTML = `数据源会话: ${Number(data.source_count || 0)} | 时间窗: ${escapeHtml(data.window || 'all')} | 深度: ${escapeHtml(data.depth || 'standard')} | 证据数: ${Number(data.count || 0)} | rerank: ${data.rerank_applied ? '已应用' : (data.rerank_tried ? '未应用' : '未尝试')}${debugText}${data.rerank_error ? ` | <span class="text-danger">${escapeHtml(data.rerank_error)}</span>` : ''}`;
             }
             const target = document.getElementById(semanticActiveEvidenceId || 'semantic-qa-stream-evidence');
             if (!target) return;
@@ -3877,7 +4434,14 @@
             const candidateRows = Array.isArray(dbg.entity_candidates) && dbg.entity_candidates.length
                 ? `<div style="margin-top:10px;padding:8px;border:1px solid #fde68a;background:#fffbeb;border-radius:8px;" class="text-sm">
                     <strong>实体候选${dbg.entity_ambiguous ? '（存在歧义）' : ''}</strong>
-                    ${dbg.entity_candidates.slice(0, 8).map(c => `<div>${escapeHtml(c.display || c.username || '')} · ${escapeHtml(c.kind || '')} · ${escapeHtml(c.source || '')} · ${escapeHtml(c.username || '')}</div>`).join('')}
+                    ${dbg.entity_candidates.slice(0, 8).map(c => {
+                        const username = encodeURIComponent(c.username || '').replace(/'/g, '%27');
+                        const display = encodeURIComponent(c.display || c.username || '').replace(/'/g, '%27');
+                        return `<div style="display:flex;align-items:center;gap:8px;justify-content:space-between;margin-top:6px;">
+                            <span>${escapeHtml(c.display || c.username || '')} · ${escapeHtml(c.kind || '')} · ${escapeHtml(c.source || '')} · ${escapeHtml(c.username || '')}</span>
+                            <button class="btn btn-secondary" style="padding:4px 8px;" onclick="useSemanticEntityCandidate('${username}', '${display}')">使用</button>
+                        </div>`;
+                    }).join('')}
                 </div>`
                 : '';
             const rows = evidence.map((item, idx) => `
@@ -3887,6 +4451,7 @@
                     <td>${escapeHtml(item.talker_name || item.talker || '')}</td>
                     <td>${escapeHtml(item.sender_name || item.sender || '')}</td>
                     <td>
+                        <div class="text-sm text-gray">来源: ${escapeHtml(item.source || 'message')}${item.chunk_type ? '/' + escapeHtml(item.chunk_type) : ''} | score=${Number(item.score || 0).toFixed(4)}${item.rerank_score ? ' | rerank=' + Number(item.rerank_score || 0).toFixed(4) : ''}</div>
                         <div>${escapeHtml(item.content || '')}</div>
                         ${renderEvidenceContext(item.context)}
                     </td>
@@ -4536,6 +5101,93 @@
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
+        }
+
+        function renderMarkdownInline(text) {
+            var out = escapeHtml(text || '');
+            out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+            out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+            return out;
+        }
+
+        function renderSafeMarkdown(markdown) {
+            var lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+            var html = [];
+            var paragraph = [];
+            var listType = '';
+
+            function flushParagraph() {
+                if (!paragraph.length) return;
+                html.push('<p>' + paragraph.map(renderMarkdownInline).join('<br>') + '</p>');
+                paragraph = [];
+            }
+
+            function closeList() {
+                if (!listType) return;
+                html.push('</' + listType + '>');
+                listType = '';
+            }
+
+            lines.forEach(function(line) {
+                var raw = String(line || '').trimEnd();
+                var trimmed = raw.trim();
+                var match;
+
+                if (!trimmed) {
+                    flushParagraph();
+                    closeList();
+                    return;
+                }
+
+                match = trimmed.match(/^(#{1,4})\s+(.+)$/);
+                if (match) {
+                    flushParagraph();
+                    closeList();
+                    var level = Math.min(match[1].length + 2, 5);
+                    html.push('<h' + level + '>' + renderMarkdownInline(match[2]) + '</h' + level + '>');
+                    return;
+                }
+
+                match = trimmed.match(/^>\s*(.+)$/);
+                if (match) {
+                    flushParagraph();
+                    closeList();
+                    html.push('<blockquote>' + renderMarkdownInline(match[1]) + '</blockquote>');
+                    return;
+                }
+
+                match = trimmed.match(/^\d+[.)]\s+(.+)$/);
+                if (match) {
+                    flushParagraph();
+                    if (listType !== 'ol') {
+                        closeList();
+                        html.push('<ol>');
+                        listType = 'ol';
+                    }
+                    html.push('<li>' + renderMarkdownInline(match[1]) + '</li>');
+                    return;
+                }
+
+                match = trimmed.match(/^[-*+]\s+(.+)$/);
+                if (match) {
+                    flushParagraph();
+                    if (listType !== 'ul') {
+                        closeList();
+                        html.push('<ul>');
+                        listType = 'ul';
+                    }
+                    html.push('<li>' + renderMarkdownInline(match[1]) + '</li>');
+                    return;
+                }
+
+                closeList();
+                paragraph.push(trimmed);
+            });
+
+            flushParagraph();
+            closeList();
+            return html.join('') || '<p>暂无摘要</p>';
         }
 
         function copyResult(type) {
