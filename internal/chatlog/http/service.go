@@ -18,6 +18,7 @@ import (
 	"github.com/sjzar/chatlog/internal/chatlog/database"
 	"github.com/sjzar/chatlog/internal/chatlog/messagehook"
 	"github.com/sjzar/chatlog/internal/chatlog/semantic"
+	"github.com/sjzar/chatlog/internal/chatlog/temporalgraph"
 	"github.com/sjzar/chatlog/internal/errors"
 )
 
@@ -55,6 +56,7 @@ type Service struct {
 	statsCache   map[string]statsCacheEntry
 
 	semantic *semantic.Manager
+	graph    *temporalgraph.Manager
 
 	semanticWatchMu      sync.Mutex
 	semanticWatchCancel  context.CancelFunc
@@ -122,6 +124,12 @@ func NewService(conf Config, db *database.Service) *Service {
 	} else {
 		s.semantic = sem
 	}
+	graph, err := temporalgraph.NewManager(conf, db)
+	if err != nil {
+		log.Warn().Err(err).Msg("temporal graph manager init failed")
+	} else {
+		s.graph = graph
+	}
 	s.loadHookEventsFromDisk()
 	s.db.SetMessageHookNotifier(s.pushMessageHookEvent)
 
@@ -169,6 +177,9 @@ func (s *Service) Stop() error {
 	}
 	if s.semantic != nil {
 		_ = s.semantic.Close()
+	}
+	if s.graph != nil {
+		_ = s.graph.Close()
 	}
 	s.stopSemanticIncrementalWatcher()
 

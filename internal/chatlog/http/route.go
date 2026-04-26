@@ -82,6 +82,19 @@ func (s *Service) initBaseRouter() {
 	s.router.GET("/api/v1/semantic/index/status", s.handleSemanticIndexStatus)
 	s.router.GET("/api/v1/semantic/index/preview", s.handleSemanticIndexPreview)
 	s.router.POST("/api/v1/semantic/qa/stream", s.handleSemanticQAStream)
+	s.router.POST("/api/v1/graph/ingest/message", s.handleGraphIngestMessage)
+	s.router.POST("/api/v1/graph/ingest/business", s.handleGraphIngestBusiness)
+	s.router.POST("/api/v1/graph/ingest/event", s.handleGraphIngestEvent)
+	s.router.GET("/api/v1/graph/status", s.handleGraphStatus)
+	s.router.GET("/api/v1/graph/config", s.handleGraphConfigGet)
+	s.router.POST("/api/v1/graph/config", s.handleGraphConfigSet)
+	s.router.POST("/api/v1/graph/rebuild", s.handleGraphRebuild)
+	s.router.POST("/api/v1/graph/pause", s.handleGraphPause)
+	s.router.POST("/api/v1/graph/resume", s.handleGraphResume)
+	s.router.GET("/api/v1/graph/query", s.handleGraphQuery)
+	s.router.GET("/api/v1/graph/timeline", s.handleGraphTimeline)
+	s.router.GET("/api/v1/graph/visualize", s.handleGraphVisualize)
+	s.router.POST("/api/v1/graph/qa", s.handleGraphQA)
 
 	s.router.NoRoute(s.NoRoute)
 }
@@ -228,6 +241,12 @@ type semanticConfigReq struct {
 	Enabled             bool    `json:"enabled"`
 	APIKey              string  `json:"api_key"`
 	BaseURL             string  `json:"base_url"`
+	OllamaBaseURL       string  `json:"ollama_base_url"`
+	DeepSeekAPIKey      string  `json:"deepseek_api_key"`
+	DeepSeekBaseURL     string  `json:"deepseek_base_url"`
+	EmbeddingProvider   string  `json:"embedding_provider"`
+	RerankProvider      string  `json:"rerank_provider"`
+	ChatProvider        string  `json:"chat_provider"`
 	EmbeddingModel      string  `json:"embedding_model"`
 	RerankModel         string  `json:"rerank_model"`
 	ChatModel           string  `json:"chat_model"`
@@ -258,6 +277,13 @@ func (s *Service) handleSemanticConfigGet(c *gin.Context) {
 		"api_key":              "",
 		"has_api_key":          strings.TrimSpace(norm.APIKey) != "",
 		"base_url":             norm.BaseURL,
+		"ollama_base_url":      norm.OllamaBaseURL,
+		"deepseek_api_key":     "",
+		"has_deepseek_api_key": strings.TrimSpace(norm.DeepSeekAPIKey) != "",
+		"deepseek_base_url":    norm.DeepSeekBaseURL,
+		"embedding_provider":   norm.EmbeddingProvider,
+		"rerank_provider":      norm.RerankProvider,
+		"chat_provider":        norm.ChatProvider,
 		"embedding_model":      norm.EmbeddingModel,
 		"rerank_model":         norm.RerankModel,
 		"chat_model":           norm.ChatModel,
@@ -288,6 +314,12 @@ func (s *Service) handleSemanticConfigSet(c *gin.Context) {
 		Enabled:             true,
 		APIKey:              strings.TrimSpace(req.APIKey),
 		BaseURL:             strings.TrimSpace(req.BaseURL),
+		OllamaBaseURL:       strings.TrimSpace(req.OllamaBaseURL),
+		DeepSeekAPIKey:      strings.TrimSpace(req.DeepSeekAPIKey),
+		DeepSeekBaseURL:     strings.TrimSpace(req.DeepSeekBaseURL),
+		EmbeddingProvider:   strings.TrimSpace(req.EmbeddingProvider),
+		RerankProvider:      strings.TrimSpace(req.RerankProvider),
+		ChatProvider:        strings.TrimSpace(req.ChatProvider),
 		EmbeddingModel:      strings.TrimSpace(req.EmbeddingModel),
 		RerankModel:         strings.TrimSpace(req.RerankModel),
 		ChatModel:           strings.TrimSpace(req.ChatModel),
@@ -311,14 +343,13 @@ func (s *Service) handleSemanticConfigSet(c *gin.Context) {
 			cfg.APIKey = strings.TrimSpace(old.APIKey)
 		}
 	}
+	if strings.TrimSpace(cfg.DeepSeekAPIKey) == "" {
+		if old := s.conf.GetSemanticConfig(); old != nil {
+			cfg.DeepSeekAPIKey = strings.TrimSpace(old.DeepSeekAPIKey)
+		}
+	}
 	if s.semantic == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "semantic manager unavailable"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
-	defer cancel()
-	if err := s.semantic.TestConnection(ctx, cfg); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "GLM 连通性测试失败: " + err.Error()})
 		return
 	}
 	s.conf.SetSemanticConfig(cfg)
@@ -339,11 +370,16 @@ func (s *Service) handleSemanticTest(c *gin.Context) {
 			cfg.APIKey = strings.TrimSpace(old.APIKey)
 		}
 	}
+	if strings.TrimSpace(cfg.DeepSeekAPIKey) == "" {
+		if old := s.conf.GetSemanticConfig(); old != nil {
+			cfg.DeepSeekAPIKey = strings.TrimSpace(old.DeepSeekAPIKey)
+		}
+	}
 	if s.semantic == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "semantic manager unavailable"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
 	if err := s.semantic.TestConnection(ctx, cfg); err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})

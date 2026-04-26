@@ -54,10 +54,10 @@ const (
 [green]前端页面:[white]
 • 仪表盘与数据库：私聊/群聊分析、数据库浏览、全局搜索
 • 推送页面：关键词推送、实时全部转发、指定联系人/群聊转发，支持 MCP、POST、Hermes Weixin、Hermes QQ
-• 实验性功能：GLM 语义检索与重排序、向量索引重建/删除、主题趋势、联系人画像
+• 实验性功能：Ollama 语义检索与重排序、可选 GLM/DeepSeek Chat、向量索引重建/删除、主题趋势、联系人画像
 
 [green]语义索引:[white]
-• API Key 不会在前端回显；保存配置前必须通过连通性测试
+• 默认使用本机 Ollama 的 qwen3-embedding:8b 与 Qwen3-Reranker；GLM/DeepSeek API Key 可选且不会在前端回显
 • 向量索引保存在工作目录下的 .chatlog_semantic/vector_index.db
 • HTTP 服务启动后会自动执行一次增量索引，补齐离线期间新增的消息
 

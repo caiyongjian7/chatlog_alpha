@@ -1016,6 +1016,7 @@
             <button class="tab-btn active" onclick="switchTab('dashboard')">仪表盘 & 数据库</button>
             <button class="tab-btn" onclick="switchTab('global-search')">全局搜索</button>
             <button class="tab-btn" onclick="switchTab('experimental')">实验性功能</button>
+            <button class="tab-btn" onclick="switchTab('temporal-graph')">时间知识图谱</button>
             <button class="tab-btn" onclick="switchTab('hook')">推送页面</button>
             <button class="tab-btn" onclick="switchTab('wxcli')">wx-cli 兼容</button>
             <button class="tab-btn" onclick="switchTab('session')">最近会话</button>
@@ -1312,30 +1313,48 @@
                         <h4>连接配置</h4>
                         <div class="semantic-config-compact">
                             <div class="form-group">
-                                <label>GLM API Key</label>
-                                <input type="text" id="semantic-api-key" class="semantic-cfg" placeholder="填写 BigModel API Key" data-dirty="false">
+                                <label>Ollama Base URL</label>
+                                <input type="text" id="semantic-ollama-base-url" class="semantic-cfg" placeholder="http://127.0.0.1:11434">
+                                <div class="text-sm text-gray">默认使用本机 Ollama；本地模型会串行调度并在调用后自动卸载，避免多模型同时占用内存。</div>
+                            </div>
+                            <div class="form-group">
+                                <label>GLM API Key（可选）</label>
+                                <input type="text" id="semantic-api-key" class="semantic-cfg" placeholder="需要会话问答/图谱抽取时填写 BigModel API Key" data-dirty="false">
                                 <div id="semantic-api-key-state" class="text-sm text-gray" style="margin-top:4px;">未保存 API Key</div>
                             </div>
                             <div class="form-group">
-                                <label>Base URL</label>
+                                <label>GLM Base URL</label>
                                 <input type="text" id="semantic-base-url" class="semantic-cfg" placeholder="https://open.bigmodel.cn/api/paas/v4">
-                                <div class="text-sm text-gray">通常保持默认；网关/代理场景下修改。</div>
+                                <div class="text-sm text-gray">仅 Chat Provider 选择 GLM 或 GLM 精排时使用。</div>
+                            </div>
+                            <div class="form-group">
+                                <label>DeepSeek API Key（可选）</label>
+                                <input type="text" id="semantic-deepseek-api-key" class="semantic-cfg" placeholder="填写 DeepSeek API Key" data-dirty="false">
+                                <div id="semantic-deepseek-api-key-state" class="text-sm text-gray" style="margin-top:4px;">未保存 DeepSeek API Key</div>
+                            </div>
+                            <div class="form-group">
+                                <label>DeepSeek Base URL</label>
+                                <input type="text" id="semantic-deepseek-base-url" class="semantic-cfg" placeholder="https://api.deepseek.com">
+                                <div class="text-sm text-gray">DeepSeek 使用 OpenAI 兼容 Chat Completions。</div>
                             </div>
                         </div>
                     </div>
 
                     <div class="semantic-config-card">
                         <h4>模型</h4>
-                        <div class="form-group"><label>Embedding Model</label><input type="text" id="semantic-embedding-model" class="semantic-cfg" value="embedding-3"><div class="text-sm text-gray">用于消息向量化。</div></div>
-                        <div class="form-group"><label>Rerank Model</label><input type="text" id="semantic-rerank-model" class="semantic-cfg" value="rerank"><div class="text-sm text-gray">用于召回结果二次精排。</div></div>
-                        <div class="form-group"><label>Chat Model</label><input type="text" id="semantic-chat-model" class="semantic-cfg" value="glm-5.1"><div class="text-sm text-gray">用于基于证据生成回答。</div></div>
+                        <div class="form-group"><label>Embedding Provider</label><select id="semantic-embedding-provider" class="semantic-cfg"><option value="ollama">Ollama</option><option value="glm">GLM</option></select><div class="text-sm text-gray">默认 Ollama。</div></div>
+                        <div class="form-group"><label>Embedding Model</label><input type="text" id="semantic-embedding-model" class="semantic-cfg" value="qwen3-embedding:8b"><div class="text-sm text-gray">用于消息向量化，Ollama 默认 qwen3-embedding:8b。</div></div>
+                        <div class="form-group"><label>Rerank Provider</label><select id="semantic-rerank-provider" class="semantic-cfg"><option value="ollama">Ollama</option><option value="glm">GLM</option></select><div class="text-sm text-gray">默认 Ollama。</div></div>
+                        <div class="form-group"><label>Rerank Model</label><input type="text" id="semantic-rerank-model" class="semantic-cfg" value="dengcao/Qwen3-Reranker-8B:Q5_K_M"><div class="text-sm text-gray">用于召回结果二次精排。</div></div>
+                        <div class="form-group"><label>Chat Provider</label><select id="semantic-chat-provider" class="semantic-cfg"><option value="glm">GLM</option><option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option></select><div class="text-sm text-gray">GLM/DeepSeek 可选；未配置 Chat 时问答、图谱抽取不可用。</div></div>
+                        <div class="form-group"><label>Chat Model</label><input type="text" id="semantic-chat-model" class="semantic-cfg" value="glm-5.1"><div class="text-sm text-gray">用于基于证据生成回答和图谱抽取。</div></div>
                     </div>
 
                     <div class="semantic-config-card">
                         <h4>回答生成</h4>
                         <div class="form-group"><label>Chat Max Tokens</label><input type="number" id="semantic-chat-max-tokens" class="semantic-cfg" value="4096" min="256" max="32768"><div class="text-sm text-gray">最大输出长度，越大越慢、成本越高。</div></div>
                         <div class="form-group"><label>Chat Temperature</label><input type="number" id="semantic-chat-temperature" class="semantic-cfg" value="0.3" min="0.01" max="2" step="0.01"><div class="text-sm text-gray">回答发散度，问答建议 0.2-0.5。</div></div>
-                        <div class="form-group"><label><input type="checkbox" id="semantic-chat-thinking" class="semantic-cfg"> GLM-5.1 Thinking</label><div class="text-sm text-gray">复杂问题更稳，但响应更慢。</div></div>
+                        <div class="form-group"><label><input type="checkbox" id="semantic-chat-thinking" class="semantic-cfg"> GLM-5.1 Thinking</label><div class="text-sm text-gray">仅 GLM Chat 生效；复杂问题更稳但响应更慢。</div></div>
                     </div>
 
                     <div class="semantic-config-card">
@@ -1351,8 +1370,8 @@
                     <div class="semantic-config-card">
                         <h4>索引参数</h4>
                         <div class="semantic-config-compact">
-                            <div class="form-group"><label>向量维度</label><input type="number" id="semantic-embedding-dim" class="semantic-cfg" value="2048" min="256" max="2048"></div>
-                            <div class="form-group"><label>并发线程数</label><input type="number" id="semantic-index-workers" class="semantic-cfg" value="4" min="1" max="32"></div>
+                            <div class="form-group"><label>向量维度</label><input type="number" id="semantic-embedding-dim" class="semantic-cfg" value="4096" min="256" max="8192"></div>
+                            <div class="form-group"><label>并发线程数</label><input type="number" id="semantic-index-workers" class="semantic-cfg" value="1" min="1" max="32"></div>
                         </div>
                         <label><input type="checkbox" id="semantic-enable-llm-chunk" class="semantic-cfg"> LLM Chunk 摘要</label>
                         <div class="text-sm text-gray">重建索引时用 Chat Model 生成更高质量的 chunk 摘要和主题，召回更准但成本和耗时更高。</div>
@@ -1410,6 +1429,97 @@
                 </div>
                 <div id="semantic-result" class="result-area hidden" style="margin-top:12px;"></div>
             </details>
+        </div>
+
+        <div id="temporal-graph" class="tab-content">
+            <h2>时间知识图谱</h2>
+            <p class="text-gray" style="margin-bottom:16px;">将聊天消息、业务数据和事件抽取为实体、关系、事实与时间线；支持证据追溯和关系随时间演变分析。</p>
+            <div class="overview-grid" id="graph-overview-grid">
+                <div class="overview-card"><div class="overview-icon blue">◎</div><div class="overview-info"><span class="overview-value" id="graph-entities">-</span><span class="overview-label">实体</span></div></div>
+                <div class="overview-card"><div class="overview-icon green">↔</div><div class="overview-info"><span class="overview-value" id="graph-relations">-</span><span class="overview-label">关系</span></div></div>
+                <div class="overview-card"><div class="overview-icon amber">◆</div><div class="overview-info"><span class="overview-value" id="graph-events">-</span><span class="overview-label">事件</span></div></div>
+                <div class="overview-card"><div class="overview-icon purple">✓</div><div class="overview-info"><span class="overview-value" id="graph-pending">-</span><span class="overview-label">待抽取</span></div></div>
+            </div>
+            <div class="actions">
+                <button class="btn btn-secondary" onclick="loadGraphStatus()">刷新状态</button>
+                <button class="btn btn-secondary" onclick="rebuildGraph(false)">增量重建</button>
+                <button class="btn btn-danger" onclick="rebuildGraph(true)">清空图谱并重建</button>
+                <button class="btn btn-secondary" id="graph-pause-btn" onclick="pauseGraph()">暂停抽取</button>
+                <button class="btn btn-secondary" id="graph-resume-btn" onclick="resumeGraph()">恢复抽取</button>
+            </div>
+            <div class="actions" style="margin-top:10px;">
+                <label class="text-sm">抽取并发 <input type="number" id="graph-workers" value="1" min="1" max="12" style="width:90px;"></label>
+                <label class="text-sm">历史入队并发 <input type="number" id="graph-enqueue-workers" value="1" min="1" max="12" style="width:90px;"></label>
+                <button class="btn btn-secondary" onclick="saveGraphConfig()">保存并发设置</button>
+                <span class="text-sm text-gray">默认 1，调高会更快但更容易触发 Chat 模型限流或本机资源占用过高。</span>
+            </div>
+            <div id="graph-status" class="result-area" style="margin-top:12px;"></div>
+
+            <div class="analytics-grid" style="margin-top:18px;">
+                <section class="analytics-panel">
+                    <h3>业务数据推送</h3>
+                    <div class="form-grid">
+                        <div class="form-group"><label>来源</label><input type="text" id="graph-business-source" placeholder="crm / erp / project"></div>
+                        <div class="form-group"><label>类型</label><input type="text" id="graph-business-type" placeholder="order / customer / ticket"></div>
+                        <div class="form-group"><label>时间</label><input type="text" id="graph-business-time" placeholder="2026-04-25 12:00:00"></div>
+                        <div class="form-group"><label>标题</label><input type="text" id="graph-business-title" placeholder="事件标题"></div>
+                        <div class="form-group" style="grid-column:1/-1;"><label>内容</label><textarea id="graph-business-content" rows="4" placeholder="输入业务内容，提交后进入图谱抽取队列"></textarea></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="ingestGraphBusiness()">推送业务数据</button>
+                </section>
+                <section class="analytics-panel">
+                    <h3>外部事件推送</h3>
+                    <div class="form-grid">
+                        <div class="form-group"><label>事件类型</label><input type="text" id="graph-event-type" placeholder="meeting / risk / milestone"></div>
+                        <div class="form-group"><label>时间</label><input type="text" id="graph-event-time" placeholder="2026-04-25 12:00:00"></div>
+                        <div class="form-group"><label>参与方</label><input type="text" id="graph-event-actors" placeholder="逗号分隔"></div>
+                        <div class="form-group"><label>对象</label><input type="text" id="graph-event-targets" placeholder="逗号分隔"></div>
+                        <div class="form-group" style="grid-column:1/-1;"><label>内容</label><textarea id="graph-event-content" rows="4" placeholder="输入事件内容，提交后进入图谱抽取队列"></textarea></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="ingestGraphEvent()">推送事件</button>
+                </section>
+            </div>
+
+            <div class="analytics-panel" style="margin-top:18px;">
+                <div class="analytics-title-row">
+                    <div>
+                        <h3>图谱查询与可视化</h3>
+                        <p>按关键词和时间窗过滤实体、关系、事件与事实。</p>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="loadGraphVisualization()">刷新图谱</button>
+                </div>
+                <div class="actions">
+                    <input type="text" id="graph-keyword" placeholder="关键词 / 实体 / 关系" onkeydown="if(event.key==='Enter') loadGraphVisualization()">
+                    <select id="graph-window">
+                        <option value="7d">近七天</option>
+                        <option value="30d">近1月</option>
+                        <option value="90d">近季度</option>
+                        <option value="1y">近1年</option>
+                        <option value="all" selected>全部</option>
+                    </select>
+                    <input type="number" id="graph-limit" value="80" min="10" max="300" style="max-width:100px;">
+                </div>
+                <div id="graph-chart" class="chart-container wide" style="height:420px;"></div>
+                <div class="analytics-grid" style="margin-top:14px;">
+                    <section class="analytics-panel">
+                        <h3>时间线</h3>
+                        <div id="graph-timeline" class="text-sm text-gray">暂无数据</div>
+                    </section>
+                    <section class="analytics-panel">
+                        <h3>事实与关系</h3>
+                        <div id="graph-facts" class="text-sm text-gray">暂无数据</div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="analytics-panel" style="margin-top:18px;">
+                <h3>图谱问答</h3>
+                <div class="form-group">
+                    <textarea id="graph-qa-query" rows="3" placeholder="例如：这个客户最近关系有什么变化？某项目这周发生了什么？"></textarea>
+                </div>
+                <button class="btn btn-primary" onclick="runGraphQA()">提问</button>
+                <div id="graph-qa-result" class="result-area" style="margin-top:12px;"></div>
+            </div>
         </div>
 
         <div id="hook" class="tab-content">
@@ -1909,6 +2019,12 @@
         let semanticEntityOverride = '';
         let semanticPreviewTalker = '';
         let semanticPreviewMapState = { yaw: -0.65, pitch: 0.45, dragging: false, lastX: 0, lastY: 0, items: [], kind: 'message' };
+        let semanticStatusLoading = false;
+        let semanticLastStatusKey = '';
+        let graphRealtimeKey = '';
+        let graphLastStatus = null;
+        let graphStatusLoading = false;
+        let graphVisualizationLoading = false;
         let dashboardSessions = [];
         let dashboardGroupStats = [];
         let dashboardStatsRange = '1d';
@@ -1939,6 +2055,7 @@
             loadHookPanel();
             loadSemanticConfigAndStatus();
             loadSemanticSourceSessions();
+            loadGraphStatus();
             bindSemanticComposer();
             connectHookStream();
             syncHookFormState();
@@ -1949,9 +2066,13 @@
                 }
                 const semanticTab = document.getElementById('experimental');
                 if (semanticTab && semanticTab.classList.contains('active')) {
-                    loadSemanticConfigAndStatus();
+                    refreshSemanticIndexStatus();
                 }
-            }, 5000);
+                const graphTab = document.getElementById('temporal-graph');
+                if (graphTab && graphTab.classList.contains('active')) {
+                    refreshGraphRealtime();
+                }
+            }, 1000);
         });
 
         window.addEventListener('resize', () => {
@@ -1980,6 +2101,10 @@
             if (tabId === 'experimental') {
                 loadSemanticConfigAndStatus();
                 loadSemanticSourceSessions();
+                refreshSemanticIndexStatus(true);
+            }
+            if (tabId === 'temporal-graph') {
+                refreshGraphRealtime(true);
             }
         }
 
@@ -2432,6 +2557,24 @@
             const dt = new Date(Number(ts) * 1000);
             if (Number.isNaN(dt.getTime())) return '-';
             return dt.toLocaleString();
+        }
+
+        function formatDurationSeconds(seconds) {
+            seconds = Number(seconds || 0);
+            if (!Number.isFinite(seconds) || seconds <= 0) return '-';
+            seconds = Math.ceil(seconds);
+            const days = Math.floor(seconds / 86400);
+            seconds %= 86400;
+            const hours = Math.floor(seconds / 3600);
+            seconds %= 3600;
+            const minutes = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            const parts = [];
+            if (days) parts.push(`${days}天`);
+            if (hours) parts.push(`${hours}小时`);
+            if (minutes) parts.push(`${minutes}分钟`);
+            if (!parts.length && secs) parts.push(`${secs}秒`);
+            return parts.slice(0, 2).join('');
         }
 
 	        function getDashboardTimeRange(kind) {
@@ -2935,7 +3078,7 @@
                 }
                 if (!idx.enabled) {
                     el.textContent = '未启用';
-                    el.title = 'GLM 语义功能未启用';
+                    el.title = '语义功能未启用';
                     return;
                 }
                 if (idx.running) {
@@ -3537,24 +3680,31 @@
         }
 
         function collectSemanticPayload() {
+            syncOllamaEmbeddingDimFromModel();
             return {
                 enabled: true,
                 api_key: document.getElementById('semantic-api-key').value.trim(),
                 base_url: document.getElementById('semantic-base-url').value.trim(),
+                ollama_base_url: document.getElementById('semantic-ollama-base-url').value.trim(),
+                deepseek_api_key: document.getElementById('semantic-deepseek-api-key').value.trim(),
+                deepseek_base_url: document.getElementById('semantic-deepseek-base-url').value.trim(),
+                embedding_provider: document.getElementById('semantic-embedding-provider').value,
+                rerank_provider: document.getElementById('semantic-rerank-provider').value,
+                chat_provider: document.getElementById('semantic-chat-provider').value,
                 embedding_model: document.getElementById('semantic-embedding-model').value.trim(),
                 rerank_model: document.getElementById('semantic-rerank-model').value.trim(),
                 chat_model: document.getElementById('semantic-chat-model').value.trim(),
                 chat_thinking: !!document.getElementById('semantic-chat-thinking').checked,
                 chat_max_tokens: parseInt(document.getElementById('semantic-chat-max-tokens').value, 10) || 4096,
                 chat_temperature: parseFloat(document.getElementById('semantic-chat-temperature').value) || 0.3,
-                embedding_dimension: parseInt(document.getElementById('semantic-embedding-dim').value, 10) || 2048,
+                embedding_dimension: parseInt(document.getElementById('semantic-embedding-dim').value, 10) || 4096,
                 enable_rerank: true,
                 enable_qa: true,
                 enable_topics: true,
                 enable_profiles: true,
                 enable_llm_chunk: !!document.getElementById('semantic-enable-llm-chunk').checked,
                 realtime_index: true,
-                index_workers: parseInt(document.getElementById('semantic-index-workers').value, 10) || 4,
+                index_workers: parseInt(document.getElementById('semantic-index-workers').value, 10) || 1,
                 recall_k: parseInt(document.getElementById('semantic-recall-k').value, 10) || 80,
                 top_n: parseInt(document.getElementById('semantic-top-n').value, 10) || 20,
                 similarity_threshold: parseFloat(document.getElementById('semantic-threshold').value) || 0.55
@@ -3702,13 +3852,25 @@
                     : '未保存 API Key';
             }
             document.getElementById('semantic-base-url').value = data.base_url || 'https://open.bigmodel.cn/api/paas/v4';
-            document.getElementById('semantic-embedding-model').value = data.embedding_model || 'embedding-3';
-            document.getElementById('semantic-rerank-model').value = data.rerank_model || 'rerank';
+            document.getElementById('semantic-ollama-base-url').value = data.ollama_base_url || 'http://127.0.0.1:11434';
+            document.getElementById('semantic-deepseek-api-key').value = data.deepseek_api_key || '';
+            const deepseekKeyState = document.getElementById('semantic-deepseek-api-key-state');
+            if (deepseekKeyState) {
+                deepseekKeyState.textContent = data.has_deepseek_api_key
+                    ? '已保存 DeepSeek API Key（安全策略：不回显）'
+                    : '未保存 DeepSeek API Key';
+            }
+            document.getElementById('semantic-deepseek-base-url').value = data.deepseek_base_url || 'https://api.deepseek.com';
+            document.getElementById('semantic-embedding-provider').value = data.embedding_provider || 'ollama';
+            document.getElementById('semantic-rerank-provider').value = data.rerank_provider || 'ollama';
+            document.getElementById('semantic-chat-provider').value = data.chat_provider || 'glm';
+            document.getElementById('semantic-embedding-model').value = data.embedding_model || 'qwen3-embedding:8b';
+            document.getElementById('semantic-rerank-model').value = data.rerank_model || 'dengcao/Qwen3-Reranker-8B:Q5_K_M';
             document.getElementById('semantic-chat-model').value = data.chat_model || 'glm-5.1';
             document.getElementById('semantic-chat-thinking').checked = !!data.chat_thinking;
             document.getElementById('semantic-chat-max-tokens').value = data.chat_max_tokens || 4096;
             document.getElementById('semantic-chat-temperature').value = data.chat_temperature || 0.3;
-            document.getElementById('semantic-embedding-dim').value = data.embedding_dimension || 2048;
+            document.getElementById('semantic-embedding-dim').value = data.embedding_dimension || 4096;
             document.getElementById('semantic-enable-rerank').checked = true;
 
             document.getElementById('semantic-enable-qa').checked = true;
@@ -3716,7 +3878,7 @@
             document.getElementById('semantic-enable-profiles').checked = true;
             document.getElementById('semantic-enable-llm-chunk').checked = !!data.enable_llm_chunk;
             document.getElementById('semantic-realtime-index').checked = true;
-            document.getElementById('semantic-index-workers').value = data.index_workers || 4;
+            document.getElementById('semantic-index-workers').value = data.index_workers || 1;
             document.getElementById('semantic-recall-k').value = data.recall_k || 80;
             document.getElementById('semantic-top-n').value = data.top_n || 20;
             document.getElementById('semantic-threshold').value = data.similarity_threshold || 0.55;
@@ -3745,6 +3907,22 @@
             }
         }
 
+        async function refreshSemanticIndexStatus(force = false) {
+            if (semanticStatusLoading) return;
+            semanticStatusLoading = true;
+            try {
+                const res = await fetch('/api/v1/semantic/index/status?format=json&_=' + Date.now(), { cache: 'no-store' });
+                if (!res.ok) throw new Error(await res.text());
+                const status = await res.json();
+                semanticLastStatusKey = status.updated_at || String(Date.now());
+                renderSemanticStatus(status);
+            } catch (e) {
+                renderSemanticStatus({ error: e.message, ready: false });
+            } finally {
+                semanticStatusLoading = false;
+            }
+        }
+
         function renderSemanticStatus(status) {
             const box = document.getElementById('semantic-status');
             if (!box) return;
@@ -3756,6 +3934,10 @@
             const pending = Number(st.pending || 0);
             const total = Number(st.total || 0);
             const finished = processed + failed;
+            const etaText = formatDurationSeconds(st.estimated_seconds_left);
+            const rateText = Number(st.processing_rate_per_minute || 0) > 0
+                ? `${Number(st.processing_rate_per_minute || 0).toFixed(2)} 会话/分钟`
+                : '-';
             setSemanticActionEnabled(indexReady);
             box.classList.remove('hidden');
             const okBadge = semanticConnectivityPassed
@@ -3778,7 +3960,11 @@
                 <div class="text-sm">已索引消息: ${Number(st.indexed_count || 0)} | 实体索引: ${Number(st.entity_count || 0)} | Chunk 索引: ${Number(st.chunk_count || 0)}</div>
                 <div class="text-sm">索引覆盖会话: ${Number(st.indexed_talkers || 0)} / ${Number(st.known_talkers || 0)} | 未覆盖 ${Number(st.unindexed_talkers || 0)} | 最近索引消息: ${escapeHtml(st.last_indexed_message_at || '-')}</div>
                 <div class="text-sm">本次任务进度: 已完成 ${finished} / 总计 ${total} | 成功 ${processed} | 失败 ${failed} | 待处理 ${pending} | ${Number(st.progress_pct || 0).toFixed(2)}%</div>
+                <div class="text-sm">处理速度: ${escapeHtml(rateText)} | 预计剩余: ${escapeHtml(etaText)} | 开始时间: ${escapeHtml(st.started_at || '-')}</div>
                 <div class="text-sm">任务模式: ${escapeHtml(st.mode || '-')} | 更新时间: ${escapeHtml(st.updated_at || '-')}</div>
+                <div style="height:8px;background:#eef2f7;border-radius:999px;overflow:hidden;margin:8px 0;">
+                    <div style="height:100%;width:${Math.max(0, Math.min(100, Number(st.progress_pct || 0))).toFixed(2)}%;background:linear-gradient(90deg,#2f80ed,#20c997);transition:width .25s ease;"></div>
+                </div>
                 ${st.paused ? `<div class="text-sm">暂停模式: ${escapeHtml(st.paused_mode || '-')} | 暂停时间: ${escapeHtml(st.paused_at || '-')}</div>` : ''}
                 <div class="text-sm">增量更新: ${escapeHtml(st.last_incremental_at || '-')} | 新增索引 ${Number(st.last_incremental_added || 0)}</div>
                 <div class="text-sm">重排序: ${escapeHtml(st.last_rerank_at || '-')} | 最近是否应用 ${st.last_rerank_applied ? '是' : '否'}</div>
@@ -3831,7 +4017,6 @@
                 } else {
                     alert('连通性测试通过');
                 }
-                await loadSemanticConfigAndStatus();
             } catch (e) {
                 semanticConnectivityPassed = false;
                 alert(`连通性测试失败: ${e.message}`);
@@ -3900,6 +4085,68 @@
             });
         }
 
+        const semanticProviderDefaults = {
+            embedding: {
+                ollama: { model: 'qwen3-embedding:8b', dim: 4096 },
+                glm: { model: 'embedding-3', dim: 2048 }
+            },
+            rerank: {
+                ollama: { model: 'dengcao/Qwen3-Reranker-8B:Q5_K_M' },
+                glm: { model: 'rerank' }
+            },
+            chat: {
+                glm: { model: 'glm-5.1', base: 'https://open.bigmodel.cn/api/paas/v4' },
+                deepseek: { model: 'deepseek-chat', base: 'https://api.deepseek.com' },
+                ollama: { model: 'qwen3:8b', base: 'http://127.0.0.1:11434' }
+            }
+        };
+
+        function knownOllamaEmbeddingDim(model) {
+            const normalized = String(model || '').trim().toLowerCase();
+            if (normalized === 'qwen3-embedding:4b') return 2560;
+            if (normalized === 'qwen3-embedding:8b') return 4096;
+            return 0;
+        }
+
+        function syncOllamaEmbeddingDimFromModel() {
+            const provider = document.getElementById('semantic-embedding-provider')?.value;
+            if (provider !== 'ollama') return;
+            const modelEl = document.getElementById('semantic-embedding-model');
+            const dimEl = document.getElementById('semantic-embedding-dim');
+            const knownDim = knownOllamaEmbeddingDim(modelEl?.value);
+            if (knownDim > 0 && dimEl) {
+                dimEl.value = knownDim;
+            }
+        }
+
+        function syncSemanticProviderDefaults(kind) {
+            if (kind === 'embedding') {
+                const provider = document.getElementById('semantic-embedding-provider').value;
+                const d = semanticProviderDefaults.embedding[provider];
+                if (!d) return;
+                document.getElementById('semantic-embedding-model').value = d.model;
+                document.getElementById('semantic-embedding-dim').value = d.dim;
+                syncOllamaEmbeddingDimFromModel();
+                return;
+            }
+            if (kind === 'rerank') {
+                const provider = document.getElementById('semantic-rerank-provider').value;
+                const d = semanticProviderDefaults.rerank[provider];
+                if (!d) return;
+                document.getElementById('semantic-rerank-model').value = d.model;
+                return;
+            }
+            if (kind === 'chat') {
+                const provider = document.getElementById('semantic-chat-provider').value;
+                const d = semanticProviderDefaults.chat[provider];
+                if (!d) return;
+                document.getElementById('semantic-chat-model').value = d.model;
+                if (provider === 'glm') document.getElementById('semantic-base-url').value = d.base;
+                if (provider === 'deepseek') document.getElementById('semantic-deepseek-base-url').value = d.base;
+                if (provider === 'ollama') document.getElementById('semantic-ollama-base-url').value = d.base;
+            }
+        }
+
         function initSemanticCfgFields() {
             document.querySelectorAll('.semantic-cfg').forEach(el => {
                 el.dataset.dirty = 'false';
@@ -3908,10 +4155,15 @@
                 }
                 el.addEventListener('dblclick', () => enterEditMode(el));
                 el.addEventListener('input', () => {
+                    if (el.id === 'semantic-embedding-model') syncOllamaEmbeddingDimFromModel();
                     el.dataset.dirty = 'true';
                     scheduleAutoSave();
                 });
                 el.addEventListener('change', () => {
+                    if (el.id === 'semantic-embedding-provider') syncSemanticProviderDefaults('embedding');
+                    if (el.id === 'semantic-embedding-model') syncOllamaEmbeddingDimFromModel();
+                    if (el.id === 'semantic-rerank-provider') syncSemanticProviderDefaults('rerank');
+                    if (el.id === 'semantic-chat-provider') syncSemanticProviderDefaults('chat');
                     el.dataset.dirty = 'true';
                     scheduleAutoSave();
                 });
@@ -3945,7 +4197,7 @@
                 const data = await res.json();
                 renderSemanticStatus(data.status || {});
                 alert(data.accepted ? '向量索引重建任务已启动，请查看状态进度' : '向量索引重建完成');
-                await loadSemanticConfigAndStatus();
+                await refreshSemanticIndexStatus(true);
             } catch (e) {
                 alert(`重建失败: ${e.message}`);
             }
@@ -3957,7 +4209,7 @@
                 if (!res.ok) throw new Error(await res.text());
                 const data = await res.json();
                 renderSemanticStatus(data.status || {});
-                await loadSemanticConfigAndStatus(true);
+                await refreshSemanticIndexStatus(true);
             } catch (e) {
                 alert(`暂停失败: ${e.message}`);
             }
@@ -3969,7 +4221,7 @@
                 if (!res.ok) throw new Error(await res.text());
                 const data = await res.json();
                 renderSemanticStatus(data.status || {});
-                await loadSemanticConfigAndStatus(true);
+                await refreshSemanticIndexStatus(true);
             } catch (e) {
                 alert(`恢复失败: ${e.message}`);
             }
@@ -5243,6 +5495,317 @@
             navigator.clipboard.writeText(text).then(() => {
                 alert('已复制到剪贴板');
             });
+        }
+
+        async function loadGraphStatus() {
+            if (graphStatusLoading) return null;
+            graphStatusLoading = true;
+            try {
+                const res = await fetch('/api/v1/graph/status?format=json');
+                const data = await res.json();
+                if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+                graphLastStatus = data;
+                setText('graph-entities', Number(data.entity_count || 0).toLocaleString());
+                setText('graph-relations', Number(data.relation_count || 0).toLocaleString());
+                setText('graph-events', Number(data.event_count || 0).toLocaleString());
+                setText('graph-pending', Number(data.pending || 0).toLocaleString());
+                const workersInput = document.getElementById('graph-workers');
+                const enqueueWorkersInput = document.getElementById('graph-enqueue-workers');
+                if (workersInput && document.activeElement !== workersInput) workersInput.value = data.workers || 1;
+                if (enqueueWorkersInput && document.activeElement !== enqueueWorkersInput) enqueueWorkersInput.value = data.enqueue_workers || 1;
+                const box = document.getElementById('graph-status');
+                if (box) {
+                    const graphEtaText = formatDurationSeconds(data.estimated_seconds_left);
+                    const graphRateText = Number(data.processing_rate_per_minute || 0) > 0
+                        ? `${Number(data.processing_rate_per_minute || 0).toFixed(2)} 条/分钟`
+                        : '-';
+                    box.innerHTML = `
+                        <div class="text-sm">
+                            状态: ${data.paused ? '<span class="badge badge-warning">已暂停</span>' : data.enqueue_running ? '<span class="badge badge-info">历史入队中</span>' : data.running ? '<span class="badge badge-info">抽取中</span>' : '<span class="badge badge-success">空闲</span>'}
+                            <span style="margin-left:10px;">来源 ${Number(data.source_count || 0).toLocaleString()}，已处理 ${Number(data.processed || 0).toLocaleString()}，处理中 ${Number(data.processing || 0).toLocaleString()}，失败 ${Number(data.failed || 0).toLocaleString()}，待处理 ${Number(data.pending || 0).toLocaleString()}</span>
+                            <div style="margin-top:6px;">进度: ${Number(data.progress_pct || 0).toFixed(2)}%；处理速度: ${escapeHtml(graphRateText)}；预计剩余: ${escapeHtml(graphEtaText)}；开始时间: ${escapeHtml(data.started_at || '-')}</div>
+                            <div style="margin-top:6px;color:var(--text-secondary);">抽取并发: ${Number(data.workers || 0)}；历史入队并发: ${Number(data.enqueue_workers || 0)}；历史入队: ${data.history_queued ? '已完成' : '未完成/进行中'}；索引库: ${escapeHtml(data.store_path || '-')}；最近更新: ${escapeHtml(data.last_updated_at || '-')}</div>
+                            ${data.last_error ? `<div class="text-danger" style="margin-top:6px;">最近错误: ${escapeHtml(data.last_error)}</div>` : ''}
+                        </div>`;
+                }
+                const pauseBtn = document.getElementById('graph-pause-btn');
+                const resumeBtn = document.getElementById('graph-resume-btn');
+                if (pauseBtn) pauseBtn.disabled = !!data.paused;
+                if (resumeBtn) resumeBtn.disabled = !data.paused;
+                return data;
+            } catch (e) {
+                const box = document.getElementById('graph-status');
+                if (box) box.innerHTML = '<div class="text-danger">图谱状态加载失败: ' + escapeHtml(String(e && e.message ? e.message : e)) + '</div>';
+                return null;
+            } finally {
+                graphStatusLoading = false;
+            }
+        }
+
+        async function refreshGraphRealtime(force = false) {
+            const status = await loadGraphStatus();
+            if (!status) return;
+            const key = [
+                status.entity_count || 0,
+                status.relation_count || 0,
+                status.event_count || 0,
+                status.fact_count || 0,
+                status.processed || 0,
+                status.failed || 0,
+                status.pending || 0,
+                status.processing || 0,
+                status.last_updated_at || ''
+            ].join('|');
+            if (force || key !== graphRealtimeKey) {
+                graphRealtimeKey = key;
+                await loadGraphVisualization();
+            }
+        }
+
+        async function saveGraphConfig() {
+            const workers = parseInt(document.getElementById('graph-workers').value, 10) || 1;
+            const enqueueWorkers = parseInt(document.getElementById('graph-enqueue-workers').value, 10) || 1;
+            const res = await fetch('/api/v1/graph/config?format=json', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workers, enqueue_workers: enqueueWorkers })
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                alert('保存图谱并发设置失败: ' + (data.error || res.status));
+                return;
+            }
+            await refreshGraphRealtime(true);
+        }
+
+        async function rebuildGraph(reset) {
+            if (reset && !confirm('确定清空当前图谱并重新从聊天记录构建吗？')) return;
+            const res = await fetch('/api/v1/graph/rebuild?format=json', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reset: !!reset })
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                alert('重建失败: ' + (data.error || res.status));
+                return;
+            }
+            await refreshGraphRealtime(true);
+        }
+
+        async function pauseGraph() {
+            const res = await fetch('/api/v1/graph/pause?format=json', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok || data.error) alert('暂停失败: ' + (data.error || res.status));
+            await refreshGraphRealtime(true);
+        }
+
+        async function resumeGraph() {
+            const res = await fetch('/api/v1/graph/resume?format=json', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok || data.error) alert('恢复失败: ' + (data.error || res.status));
+            await refreshGraphRealtime(true);
+        }
+
+        function graphWindowParam() {
+            const w = document.getElementById('graph-window')?.value || '30d';
+            return w === 'all' ? '' : `&window=${encodeURIComponent(w)}`;
+        }
+
+        function graphLimitParam() {
+            return Number(document.getElementById('graph-limit')?.value || 80);
+        }
+
+        function graphEmptyHint(label) {
+            const w = document.getElementById('graph-window')?.value || 'all';
+            const st = graphLastStatus || {};
+            const hasGlobalData = Number(st.relation_count || 0) > 0 || Number(st.event_count || 0) > 0 || Number(st.fact_count || 0) > 0;
+            if (w !== 'all' && hasGlobalData) {
+                return `当前时间窗无${label}，可切换为“全部”查看历史图谱数据。`;
+            }
+            return `暂无${label}`;
+        }
+
+        async function loadGraphVisualization() {
+            if (graphVisualizationLoading) return;
+            graphVisualizationLoading = true;
+            try {
+                const keyword = document.getElementById('graph-keyword')?.value || '';
+                const limit = graphLimitParam();
+                const qs = `format=json&keyword=${encodeURIComponent(keyword)}&limit=${limit}${graphWindowParam()}`;
+                const [visRes, queryRes] = await Promise.all([
+                    fetch('/api/v1/graph/visualize?' + qs),
+                    fetch('/api/v1/graph/query?' + qs)
+                ]);
+                const vis = await visRes.json();
+                const query = await queryRes.json();
+                if (!visRes.ok || vis.error) throw new Error(vis.error || `HTTP ${visRes.status}`);
+                if (!queryRes.ok || query.error) throw new Error(query.error || `HTTP ${queryRes.status}`);
+                renderGraphChart(vis);
+                renderGraphTimeline(vis.timeline || []);
+                renderGraphFacts(query);
+            } catch (e) {
+                const chart = document.getElementById('graph-chart');
+                if (chart) chart.innerHTML = '<div class="analytics-empty">图谱加载失败: ' + escapeHtml(String(e && e.message ? e.message : e)) + '</div>';
+            } finally {
+                graphVisualizationLoading = false;
+            }
+        }
+
+        function renderGraphChart(data) {
+            const el = document.getElementById('graph-chart');
+            if (!el) return;
+            const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+            const edges = Array.isArray(data.edges) ? data.edges : [];
+            if (!nodes.length && !edges.length) {
+                el.innerHTML = '<div class="analytics-empty">暂无图谱数据。可先点击“增量重建”，或推送业务数据/事件。</div>';
+                return;
+            }
+            if (typeof echarts === 'undefined') {
+                el.innerHTML = '<div class="analytics-empty">需要 ECharts 支持图谱可视化</div>';
+                return;
+            }
+            const chart = getChartInstance('temporal-graph', el);
+            if (!chart) return;
+            chart.setOption({
+                tooltip: {
+                    formatter: function(p) {
+                        if (p.dataType === 'edge') return escapeHtml(p.data.label || '') + '<br>置信度: ' + Number(p.data.confidence || 0).toFixed(2);
+                        return escapeHtml(p.data.name || '') + '<br>类型: ' + escapeHtml(p.data.category || p.data.kind || 'unknown') + '<br>提及: ' + (p.data.value || 0);
+                    }
+                },
+                legend: [{ data: ['person', 'organization', 'project', 'product', 'customer', 'conversation', 'keyword', 'unknown'] }],
+                series: [{
+                    type: 'graph',
+                    layout: 'force',
+                    roam: true,
+                    draggable: true,
+                    focusNodeAdjacency: true,
+                    force: { repulsion: 220, edgeLength: 90 },
+                    categories: ['person', 'organization', 'project', 'product', 'customer', 'conversation', 'keyword', 'unknown'].map(name => ({ name })),
+                    data: nodes.map(n => ({
+                        id: n.id,
+                        name: n.name,
+                        value: Math.max(1, Number(n.value || 1)),
+                        symbolSize: Math.max(18, Math.min(62, 16 + Math.sqrt(Number(n.value || 1)) * 4)),
+                        category: n.kind || 'unknown',
+                        kind: n.kind || 'unknown'
+                    })),
+                    links: edges.map(e => ({
+                        id: e.id,
+                        source: e.source,
+                        target: e.target,
+                        label: e.label,
+                        confidence: e.confidence,
+                        lineStyle: { opacity: e.status === 'ended' ? 0.35 : 0.75, width: Math.max(1, Math.min(5, Number(e.evidence || 1))) }
+                    })),
+                    edgeLabel: { show: true, formatter: p => p.data.label || '', fontSize: 10 },
+                    label: { show: true, formatter: '{b}' }
+                }]
+            });
+        }
+
+        function renderGraphTimeline(items) {
+            const box = document.getElementById('graph-timeline');
+            if (!box) return;
+            if (!items.length) {
+                box.innerHTML = '<div class="analytics-empty">' + escapeHtml(graphEmptyHint('时间线')) + '</div>';
+                return;
+            }
+            const sorted = items.slice().sort((a, b) => Number(b.time || 0) - Number(a.time || 0)).slice(0, 30);
+            box.innerHTML = sorted.map(item => `
+                <div style="border-left:3px solid #3b82f6;padding:0 0 12px 10px;margin-bottom:8px;">
+                    <div><strong>${escapeHtml(item.title || item.type || '事件')}</strong></div>
+                    <div>${escapeHtml(item.description || '')}</div>
+                    <div class="text-gray">${formatUnixTime(item.time)} · ${escapeHtml(item.type || '')}</div>
+                </div>`).join('');
+        }
+
+        function renderGraphFacts(data) {
+            const box = document.getElementById('graph-facts');
+            if (!box) return;
+            const relations = Array.isArray(data.relations) ? data.relations : [];
+            const facts = Array.isArray(data.facts) ? data.facts : [];
+            const relationHtml = relations.slice(0, 20).map(r => `
+                <div style="padding:8px;border-bottom:1px solid var(--border);">
+                    <strong>${escapeHtml(r.subject || '')}</strong> <span class="text-gray">--${escapeHtml(r.predicate || '')}--></span> <strong>${escapeHtml(r.object || '')}</strong>
+                    <div class="text-gray">状态 ${escapeHtml(r.status || '')} · 验证 ${escapeHtml(r.verified || 'unverified')} · 支持度 ${Number(r.support_score || 0).toFixed(2)} · 置信度 ${Number(r.confidence || 0).toFixed(2)} · ${formatUnixTime(r.last_seen)}</div>
+                    ${r.conflict_group ? `<div class="text-danger">冲突组: ${escapeHtml(r.conflict_group)}</div>` : ''}
+                </div>`).join('');
+            const factHtml = facts.slice(0, 20).map(f => `
+                <div style="padding:8px;border-bottom:1px solid var(--border);">
+                    ${escapeHtml(f.statement || '')}
+                    ${f.canonical_statement ? `<div class="text-gray">归一: ${escapeHtml(f.canonical_statement)}</div>` : ''}
+                    <div class="text-gray">${escapeHtml(f.change_type || '')} · ${escapeHtml(f.status || '')} · 验证 ${escapeHtml(f.verified || 'unverified')} · 支持度 ${Number(f.support_score || 0).toFixed(2)} · ${formatUnixTime(f.valid_from)}</div>
+                    ${f.conflict_group ? `<div class="text-danger">冲突组: ${escapeHtml(f.conflict_group)}</div>` : ''}
+                </div>`).join('');
+            box.innerHTML = relationHtml + factHtml || '<div class="analytics-empty">' + escapeHtml(graphEmptyHint('事实和关系')) + '</div>';
+        }
+
+        async function ingestGraphBusiness() {
+            const payload = {
+                source: document.getElementById('graph-business-source')?.value || 'manual',
+                type: document.getElementById('graph-business-type')?.value || 'business',
+                time: document.getElementById('graph-business-time')?.value || new Date().toISOString(),
+                title: document.getElementById('graph-business-title')?.value || '',
+                content: document.getElementById('graph-business-content')?.value || ''
+            };
+            if (!payload.content.trim()) return alert('请填写业务内容');
+            await postGraphIngest('/api/v1/graph/ingest/business', payload);
+        }
+
+        async function ingestGraphEvent() {
+            const split = v => String(v || '').split(/[,，、]/).map(x => x.trim()).filter(Boolean);
+            const payload = {
+                event_type: document.getElementById('graph-event-type')?.value || 'event',
+                time: document.getElementById('graph-event-time')?.value || new Date().toISOString(),
+                actors: split(document.getElementById('graph-event-actors')?.value || ''),
+                targets: split(document.getElementById('graph-event-targets')?.value || ''),
+                content: document.getElementById('graph-event-content')?.value || ''
+            };
+            if (!payload.content.trim()) return alert('请填写事件内容');
+            await postGraphIngest('/api/v1/graph/ingest/event', payload);
+        }
+
+        async function postGraphIngest(url, payload) {
+            const res = await fetch(url + '?format=json', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                alert('推送失败: ' + (data.error || res.status));
+                return;
+            }
+            await refreshGraphRealtime(true);
+            alert('已进入图谱抽取队列');
+        }
+
+        async function runGraphQA() {
+            const box = document.getElementById('graph-qa-result');
+            const query = document.getElementById('graph-qa-query')?.value || '';
+            if (!query.trim()) return alert('请输入问题');
+            if (box) box.innerHTML = '<div class="analytics-empty">正在基于时间知识图谱回答...</div>';
+            const res = await fetch('/api/v1/graph/qa?format=json', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, window: document.getElementById('graph-window')?.value || '30d' })
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                if (box) box.innerHTML = '<div class="text-danger">问答失败: ' + escapeHtml(data.error || res.status) + '</div>';
+                return;
+            }
+            if (box) box.innerHTML = '<div class="dashboard-summary-md">' + renderSafeMarkdown(data.answer || '') + '</div>';
+        }
+
+        function setText(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        }
+
+        function formatUnixTime(ts) {
+            ts = Number(ts || 0);
+            if (!ts) return '-';
+            const d = new Date(ts * 1000);
+            return d.toLocaleString();
         }
 
         document.getElementById('clearCacheBtn').addEventListener('click', async () => {

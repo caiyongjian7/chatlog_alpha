@@ -138,7 +138,7 @@ func isSensitiveConfigKey(key string) bool {
 	case "data_key", "img_key", "api_key", "client_secret", "access_token", "refresh_token", "password":
 		return true
 	}
-	return strings.Contains(key, "token") || strings.Contains(key, "secret")
+	return strings.Contains(key, "token") || strings.Contains(key, "secret") || strings.Contains(key, "api_key")
 }
 
 var DataDirConfigs = map[string]bool{

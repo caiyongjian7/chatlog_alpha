@@ -6,8 +6,18 @@
 
 ## 更新日志（近期）
 
+### 2026-04-26
+
+- 实验性语义能力默认切换到本地 Ollama：embedding 默认 `qwen3-embedding:8b`，rerank 默认 `dengcao/Qwen3-Reranker-8B:Q5_K_M`，默认地址 `http://127.0.0.1:11434`。
+- GLM/DeepSeek 调整为可选 Chat provider：未配置 Chat API Key 时仍可进行向量索引、语义搜索和 Ollama 精排；会话问答、LLM 摘要和时间知识图谱抽取等 Chat 能力会提示配置后使用。
+- 前端“配置与索引管理”新增 Ollama Base URL、DeepSeek API Key/Base URL、Embedding/Rerank/Chat Provider 配置；切换 provider 时会自动同步对应默认模型名。
+- Ollama 调用新增串行调度：embedding、rerank、Ollama chat 共享同一执行锁，避免多个本地模型同时加载；同一阶段会复用已加载模型，阶段切换、任务结束或连通性测试结束后释放模型。
+- 向量索引和时间知识图谱状态新增处理速度与预计完成时长展示，便于判断本地 Ollama 或远程 LLM 任务是否需要暂停、调低并发或更换模型。
+- 修正 Ollama `qwen3-embedding:4b` 维度识别：自动使用 `2560` 维，避免索引已写入但覆盖会话、最近索引消息和检索按错误维度查空。
+
 ### 2026-04-25
 
+- 新增“时间知识图谱”实验平台：支持聊天消息、业务数据和外部事件进入本地图谱抽取队列，自动维护实体、关系、事件、事实、证据和时间版本，并提供前端图谱可视化、时间线、事实关系列表和图谱问答。
 - 向量索引新增暂停/恢复：暂停会取消当前构建并保留断点，恢复后重建任务按断点续传继续；暂停状态下实时增量索引不会继续触发。
 - Chunk 索引增量优化：会话 chunk 不再每次整会话删除重建，会按 `content_hash` 只重算变化片段并清理过期 chunk，降低大群聊和 LLM Chunk 的重复向量化成本。
 - Chunk 尾部窗口优化：新增消息通常只从最后一个已索引 session chunk 的起点开始重建尾部片段，避免每次扫描整段超长会话。
@@ -81,6 +91,7 @@
   - 也支持推送到 Hermes Agent 的微信 home channel
   - 也支持推送到 Hermes Agent 的 QQ home channel
 - 推送事件：支持持久化保存、启动恢复与一键清理
+- 时间知识图谱：支持业务/事件推送、聊天消息抽取、关系演化、证据链、时间线和图谱问答
 
 
 ## GitHub 自动构建产物
@@ -212,7 +223,7 @@ ls -l "$BIN_PATH"
 - `GET /api/v1/db/query`
 - `POST /api/v1/cache/clear`
 
-语义检索（GLM Embedding + Rerank）：
+语义检索（Ollama Embedding + Rerank，GLM/DeepSeek Chat 可选）：
 
 - `GET /api/v1/semantic/config`
 - `POST /api/v1/semantic/config`
@@ -225,6 +236,20 @@ ls -l "$BIN_PATH"
   - `POST /api/v1/semantic/qa/stream`（SSE 流式问答，前端默认使用）
 - `GET /api/v1/semantic/topics`
 - `GET /api/v1/semantic/profiles`
+
+时间知识图谱：
+
+- `POST /api/v1/graph/ingest/message`
+- `POST /api/v1/graph/ingest/business`
+- `POST /api/v1/graph/ingest/event`
+- `GET /api/v1/graph/status`
+- `POST /api/v1/graph/rebuild`
+- `POST /api/v1/graph/pause`
+- `POST /api/v1/graph/resume`
+- `GET /api/v1/graph/query`
+- `GET /api/v1/graph/timeline`
+- `GET /api/v1/graph/visualize`
+- `POST /api/v1/graph/qa`
 
 关键词推送（前端“关键词推送”页面与 TUI 同步）：
 
@@ -321,7 +346,7 @@ YAML 可读性优化：
 - 语义索引覆盖卡片会显示 `检测中 / 未启用 / 构建中 / 未建立 / 已索引条数 / 不可用`，避免接口异常或索引为空时表现为空白。
 - 分组统计（私聊/群聊独立分析）使用各面板的 `since` 参数过滤，默认"近 7 天"。
 
-## GLM 语义能力（Embedding-3 + Rerank + GLM-5.1）
+## 实验性语义能力（Ollama Embedding/Rerank + 可选 GLM/DeepSeek Chat）
 
 前端入口：
 
@@ -332,24 +357,54 @@ YAML 可读性优化：
 
 配置与测试：
 
-- 支持配置 `api_key`、`base_url`、`embedding_model`、`rerank_model`、`chat_model`、`chat_max_tokens`、`chat_temperature`、`embedding_dimension`、`recall_k`、`top_n`、`similarity_threshold`。
-- 支持配置 `index_workers`（并发索引线程数，默认 4，最大 32）。
-- 语义能力属于实验性固定能力（前端不可关闭）；仅在“连通性通过 + 索引就绪”后可使用检索/问答等动作。
-- `api_key` 无默认值；`GET /api/v1/semantic/config` 不回显真实 key，仅返回 `has_api_key` 标记。
+- 支持配置 `ollama_base_url`、`embedding_provider`、`rerank_provider`、`chat_provider`、`api_key`、`base_url`、`deepseek_api_key`、`deepseek_base_url`、`embedding_model`、`rerank_model`、`chat_model`、`chat_max_tokens`、`chat_temperature`、`embedding_dimension`、`recall_k`、`top_n`、`similarity_threshold`。
+- 支持配置 `index_workers`（并发索引线程数，默认 1，最大 32）。
+- 语义能力属于实验性固定能力（前端不可关闭）；`POST /api/v1/semantic/test` 仅做当前表单配置的临时连通性测试，不保存配置、不启动索引、不改变功能状态。Embedding 未配置或不可连接时，索引、检索和问答禁止启动。
+- Ollama 默认地址为 `http://127.0.0.1:11434`，默认使用 `qwen3-embedding:8b` 和 `dengcao/Qwen3-Reranker-8B:Q5_K_M`。
+- 本地 Ollama 模型采用串行调度：同一时间只运行一个 Ollama 模型，避免 embedding、rerank、chat 同时占用内存/显存；同一阶段会复用已加载模型，阶段切换、任务结束或连通性测试结束后主动释放。代价是切换 embedding/rerank/chat 阶段时会有冷启动开销。
+- 性能提示：`qwen3-embedding:8b`、8B 级 rerank/chat 模型对内存和 CPU/GPU 压力较高，16GB 内存机器建议保持 `index_workers=1`，必要时改用 `qwen3-embedding:4b` 或更小模型；Ollama 场景调高并发通常不会线性加速，反而可能增加排队、换模和内存压力。
+- 费用提示：GLM、DeepSeek 等远程 API 会按模型、输入 token、输出 token 和请求量计费。重建向量索引、开启 LLM Chunk 摘要、时间知识图谱抽取/校验、热点摘要、主题画像和会话问答都可能产生大量请求；建议先用小时间窗/少量会话测试，再进行全量重建或高并发抽取。
+- `api_key` 仅用于 GLM Chat 或 GLM provider，`deepseek_api_key` 仅用于 DeepSeek Chat；两者均无默认值，配置接口不回显真实 key，仅返回 `has_api_key` / `has_deepseek_api_key` 标记。
 - `POST /api/v1/semantic/config` 时若 `api_key` 留空，将保留已保存 key（不会清空）。
 - 默认模型：
-  - embedding：`embedding-3`
-  - rerank：`rerank`
-  - chat：`glm-5.1`
-- 默认向量维度为 `2048`。如果从旧版本的 `512` 维切换到 `2048` 维，需要重建向量索引。
+  - embedding provider：`ollama`
+  - embedding：`qwen3-embedding:8b`
+  - rerank provider：`ollama`
+  - rerank：`dengcao/Qwen3-Reranker-8B:Q5_K_M`
+  - chat provider：`glm`
+  - chat：`glm-5.1`（可选；未配置 GLM API Key 时，会话问答、LLM 摘要、时间知识图谱抽取不可用）
+- DeepSeek Chat 可选配置：`chat_provider=deepseek`，默认 `deepseek_base_url=https://api.deepseek.com`，默认模型 `deepseek-chat`；也可手动改为 `deepseek-reasoner`。
+- 默认向量维度为 `4096`，与 `qwen3-embedding:8b` 的 Ollama 输出保持一致；`qwen3-embedding:4b` 会自动识别为 `2560` 维。维度或 embedding 模型变更后需要重建向量索引。
 - Embedding 请求限制：单次数组最多 64 条；单条输入最多约 3072 tokens，服务端会按该上限做近似截断并自动拆批。
-- `chat_model` 通过 GLM Chat Completions 调用，默认请求路径为 `<base_url>/chat/completions`。
+- `chat_model` 默认通过 GLM Chat Completions 调用，请求路径为 `<base_url>/chat/completions`；如选择 DeepSeek，则请求 `<deepseek_base_url>/chat/completions`；如选择 Ollama Chat，则请求 `<ollama_base_url>/api/chat`。
+
+## 时间知识图谱
+
+- 前端入口：“时间知识图谱”标签页。
+- 本地图谱库路径：`<WorkDir>/.chatlog_graph/temporal_graph.db`。
+- 图谱 schema 包含 `graph_entities`、`graph_relations`、`graph_events`、`graph_facts`、`graph_evidence`、`graph_jobs`、`graph_meta` 和 `graph_source_records`。
+- 抽取模型复用“实验性功能”里的 Chat 配置；默认需要配置 GLM API Key。不做本地规则兜底；未配置 Chat、模型请求失败、JSON 解析失败或模型返回空抽取结果时不会产出图谱结果，并会在图谱状态中展示错误。
+- 聊天消息接入：图谱模块会在启动后先全量扫描最近会话并建立来源队列，之后独立轮询最近会话并按每个会话的消息 `seq` 增量入队；不依赖关键词/转发 hook。消息来源会携带前 5 条、后 2 条上下文和会话参与者；历史入队还会额外生成会话 chunk 来源，用于抽取跨多条消息形成的事实和关系变化。点击前端“增量重建”或调用 `POST /api/v1/graph/rebuild` 可手动补齐。
+- 图谱聊天数据源会过滤纯媒体占位、撤回通知、语音/通话占位、附件占位、极短确认语和纯 @ 召集内容；已有队列中的同类低信息来源会直接标记为已处理，不再调用 GLM。
+- 图谱入库前会做确定性质量增强：基于会话参与者、联系人显示名、wxid 和业务实体提示做别名归一；关系谓词会映射为稳定的规范谓词；“今天/明天/下周/月底/4月25日”等时间表达会结合消息时间解析为绝对时间。
+- 抽取队列支持并发 worker：默认 1 个 Chat 抽取 worker、1 个历史入队 worker，可在前端调整；来源会先原子领取为 `processing`，中断重启后自动恢复为 `pending`，避免重复抽取或卡住。
+- 性能与费用提示：图谱抽取每条来源通常会调用 Chat 模型做抽取，部分流程还会做证据校验/归一化，远程 GLM/DeepSeek 会产生 token 费用；Ollama 本地 Chat 虽不产生 API 费用，但 8B 级模型抽取速度较慢且占用内存，建议默认并发 1，确认机器资源和模型稳定后再调高。
+- 业务数据和外部事件可通过 ingest API 或前端表单推送；接口支持单对象或数组批量提交。
+- 业务数据的 `entities`、外部事件的 `actors/targets` 会作为强实体提示入库，并同步传给 Chat 模型作为抽取约束。
+- 当 Chat 抽取结果包含 `ended/updated/conflict` 等变更时，后端会关闭同一关系/事实的旧 `active` 版本并写入 `valid_to`，用于展示关系和事实的时间演变。
+- 图谱抽取后会再调用 Chat 模型做一次证据校验和归一化：不被证据支持的事实/关系不会入库；保留项会写入 `verified`、`support_score`、`canonical_statement/canonical_predicate` 和可选 `conflict_group`。
+- 实体入库会维护 `canonical_key/canonical_name/canonical_id`，用于合并昵称、备注、群昵称和同一实体的不同称呼；前端事实/关系列表会展示验证状态、支持度、归一表述和冲突组。
+- 图谱问答优先检索时间图谱中的实体、关系、事实和事件，再调用 Chat 模型生成关于事实、关系变化和证据来源的回答；Chat 未配置时返回本地证据摘要。
+- `POST /api/v1/graph/rebuild` 默认只补齐/重跑未完成内容；传 `{"reset":true}` 会清空实体/关系/事件/事实/证据并把原始来源重新置为待抽取。
+- `pause/resume` 只控制图谱抽取队列，不影响语义向量索引。
+- 图谱状态：`GET /api/v1/graph/status` 会返回 `source_count` / `pending` / `processing` / `processed` / `failed` / `progress_pct`，并展示 `started_at` / `processing_rate_per_minute` / `estimated_seconds_left` 用于估算当前抽取任务剩余时长。刚启动或尚未完成任何来源时预计时长会显示为空。
 
 向量索引：
 
 - 实时状态：`GET /api/v1/semantic/index/status`
   - 状态字段包含：
     - 基础构建状态：`indexed_count` / `processed` / `failed` / `pending` / `total` / `progress_pct`
+    - 预计完成状态：`started_at` / `processing_rate_per_minute` / `estimated_seconds_left`
     - 增量状态：`last_incremental_at` / `last_incremental_added` / `last_incremental_error`
     - 重排序状态：`last_rerank_at` / `last_rerank_applied` / `last_rerank_error`
   - `pending` 仅表示未处理会话数；构建进度按 `processed + failed` 计算，失败项会单独展示。
@@ -374,8 +429,8 @@ YAML 可读性优化：
 已接入能力（6项）：
 
 1. 语义全局检索：`GET /api/v1/semantic/search?query=...&chat=...&window=7d&source_limit=50`
-2. 检索精排：`semantic/search` 默认开启 rerank（可配置关闭）
-3. 会话级问答（RAG 检索证据 + 前后文扩展 + GLM 流式生成）：`POST /api/v1/semantic/qa/stream`
+2. 检索精排：`semantic/search` 默认开启 Ollama rerank
+3. 会话级问答（RAG 检索证据 + 前后文扩展 + Chat 流式生成）：`POST /api/v1/semantic/qa/stream`
 5. 主题聚类/趋势（统计图表 + LLM 摘要）：`GET /api/v1/semantic/topics`
 6. 联系人/发送者语义画像（关键词聚合 + LLM 摘要）：`GET /api/v1/semantic/profiles`
 

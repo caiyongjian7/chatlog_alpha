@@ -223,6 +223,15 @@ func (s *Store) Count() (int, error) {
 	return n, nil
 }
 
+func (s *Store) CountFor(model string, dim int) (int, error) {
+	row := s.db.QueryRow(`SELECT COUNT(1) FROM semantic_embeddings WHERE model=? AND dim=?`, model, dim)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *Store) EntityCount(model string, dim int) (int, error) {
 	row := s.db.QueryRow(`SELECT COUNT(1) FROM semantic_entities WHERE model=? AND dim=?`, model, dim)
 	var n int

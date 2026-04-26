@@ -89,13 +89,18 @@ func (c *ServerConfig) GetSaveDecryptedMedia() bool {
 func (c *ServerConfig) GetSemanticConfig() *SemanticConfig {
 	if c.Semantic == nil {
 		c.Semantic = &SemanticConfig{
+			OllamaBaseURL:       DefaultOllamaBaseURL,
+			DeepSeekBaseURL:     DefaultDeepSeekBaseURL,
+			EmbeddingProvider:   ProviderOllama,
+			RerankProvider:      ProviderOllama,
+			ChatProvider:        ProviderGLM,
 			BaseURL:             DefaultGLMBaseURL,
-			EmbeddingModel:      DefaultGLMEmbedding,
-			RerankModel:         DefaultGLMRerank,
+			EmbeddingModel:      DefaultOllamaEmbedding,
+			RerankModel:         DefaultOllamaRerank,
 			ChatModel:           DefaultGLMChat,
 			ChatMaxTokens:       DefaultSemanticMaxTokens,
 			ChatTemperature:     DefaultSemanticTemp,
-			EmbeddingDimension:  DefaultGLMEmbeddingDim,
+			EmbeddingDimension:  DefaultOllamaEmbeddingDim,
 			EnableRerank:        true,
 			EnableQA:            true,
 			EnableTopics:        true,

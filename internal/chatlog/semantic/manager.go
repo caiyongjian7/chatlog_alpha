@@ -94,6 +94,9 @@ type IndexStatus struct {
 	Pending              int      `json:"pending"`
 	Total                int      `json:"total"`
 	ProgressPct          float64  `json:"progress_pct"`
+	StartedAt            string   `json:"started_at,omitempty"`
+	ProcessingRatePerMin float64  `json:"processing_rate_per_minute,omitempty"`
+	EstimatedSecondsLeft int64    `json:"estimated_seconds_left,omitempty"`
 	UpdatedAt            string   `json:"updated_at,omitempty"`
 	LastError            string   `json:"last_error,omitempty"`
 	LastIncrementalAt    string   `json:"last_incremental_at,omitempty"`
@@ -176,6 +179,7 @@ func (m *Manager) TestConnection(ctx context.Context, cfg conf.SemanticConfig) e
 }
 
 func (m *Manager) Status() IndexStatus {
+	_ = m.refreshCount()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := m.status
@@ -200,8 +204,8 @@ func (m *Manager) Rebuild(ctx context.Context, reset bool) error {
 	if !cfg.Enabled {
 		return fmt.Errorf("semantic is disabled")
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return fmt.Errorf("glm api key is empty")
+	if !conf.SemanticEmbeddingReady(cfg) {
+		return fmt.Errorf("embedding model is not configured")
 	}
 	if err := m.runWithBuildStatus(ctx, "rebuild", func(runCtx context.Context) error {
 		return m.buildAll(runCtx, cfg, "rebuild", true, reset)
@@ -216,8 +220,8 @@ func (m *Manager) StartRebuild(timeout time.Duration, reset bool) error {
 	if !cfg.Enabled {
 		return fmt.Errorf("semantic is disabled")
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return fmt.Errorf("glm api key is empty")
+	if !conf.SemanticEmbeddingReady(cfg) {
+		return fmt.Errorf("embedding model is not configured")
 	}
 	if err := m.beginBuildStatus("rebuild"); err != nil {
 		return err
@@ -245,7 +249,7 @@ func (m *Manager) Incremental(ctx context.Context) error {
 	if !cfg.Enabled || !cfg.RealtimeIndex {
 		return nil
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	if !conf.SemanticEmbeddingReady(cfg) {
 		return nil
 	}
 	if m.Status().Paused {
@@ -254,7 +258,7 @@ func (m *Manager) Incremental(ctx context.Context) error {
 	if m.Status().Running {
 		return nil
 	}
-	before, _ := m.store.Count()
+	before, _ := m.store.CountFor(cfg.EmbeddingModel, cfg.EmbeddingDimension)
 	if err := m.runWithBuildStatus(ctx, "incremental", func(runCtx context.Context) error {
 		return m.buildAll(runCtx, cfg, "incremental", false, false)
 	}); err != nil {
@@ -265,7 +269,7 @@ func (m *Manager) Incremental(ctx context.Context) error {
 		m.mu.Unlock()
 		return err
 	}
-	after, _ := m.store.Count()
+	after, _ := m.store.CountFor(cfg.EmbeddingModel, cfg.EmbeddingDimension)
 	added := after - before
 	if added < 0 {
 		added = 0
@@ -359,6 +363,9 @@ func (m *Manager) SearchWithMetaScoped(ctx context.Context, query string, talker
 	cfg := m.currentConfig()
 	if !cfg.Enabled {
 		return SearchResult{}, fmt.Errorf("semantic is disabled")
+	}
+	if !conf.SemanticEmbeddingReady(cfg) {
+		return SearchResult{}, fmt.Errorf("embedding model is not configured")
 	}
 	if strings.TrimSpace(query) == "" {
 		return SearchResult{}, fmt.Errorf("query is empty")
@@ -504,7 +511,7 @@ func (m *Manager) SearchWithMetaScoped(ctx context.Context, query string, talker
 		scored = scored[:expandedRecall]
 	}
 	result := SearchResult{Hits: scored}
-	if rerank && cfg.EnableRerank {
+	if rerank && conf.SemanticRerankReady(cfg) {
 		result.RerankTried = true
 		docs := make([]string, 0, len(scored))
 		for _, item := range scored {
@@ -668,6 +675,9 @@ func (m *Manager) SearchEntities(ctx context.Context, query string, talkers []st
 	cfg := m.currentConfig()
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("semantic is disabled")
+	}
+	if !conf.SemanticEmbeddingReady(cfg) {
+		return nil, fmt.Errorf("embedding model is not configured")
 	}
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -1802,19 +1812,27 @@ func (m *Manager) beginBuildStatus(mode string) error {
 	}
 	m.status.Running = true
 	m.status.Mode = mode
+	m.status.StartedAt = time.Now().Format(time.RFC3339)
+	m.status.ProcessingRatePerMin = 0
+	m.status.EstimatedSecondsLeft = 0
 	m.status.LastError = ""
 	m.status.CurrentTalker = ""
 	m.status.FailedTalkers = nil
+	m.status.UpdatedAt = time.Now().Format(time.RFC3339)
 	return nil
 }
 
 func (m *Manager) endBuildStatus(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.client != nil {
+		go ollamaScheduler.Release(context.Background())
+	}
 	m.status.Running = false
 	m.status.Mode = ""
 	m.status.CurrentTalker = ""
 	m.cancel = nil
+	m.status.EstimatedSecondsLeft = 0
 	m.status.UpdatedAt = time.Now().Format(time.RFC3339)
 	if err != nil && !(m.status.Paused && stderrors.Is(err, context.Canceled)) {
 		m.status.LastError = err.Error()
@@ -1844,6 +1862,22 @@ func (m *Manager) setProgress(processed, failed, total int, currentTalker string
 		pending = 0
 	}
 	m.status.Pending = pending
+	m.status.UpdatedAt = time.Now().Format(time.RFC3339)
+	finished := processed + failed
+	m.status.ProcessingRatePerMin = 0
+	m.status.EstimatedSecondsLeft = 0
+	if finished > 0 && m.status.StartedAt != "" {
+		if started, err := time.Parse(time.RFC3339, m.status.StartedAt); err == nil {
+			elapsed := time.Since(started).Seconds()
+			if elapsed > 0 {
+				ratePerSec := float64(finished) / elapsed
+				m.status.ProcessingRatePerMin = ratePerSec * 60
+				if pending > 0 && ratePerSec > 0 {
+					m.status.EstimatedSecondsLeft = int64(math.Ceil(float64(pending) / ratePerSec))
+				}
+			}
+		}
+	}
 	if total > 0 {
 		m.status.ProgressPct = float64(processed+failed) * 100 / float64(total)
 		if m.status.ProgressPct < 0 {
@@ -1969,11 +2003,11 @@ func singleLine(s string, limit int) string {
 }
 
 func (m *Manager) refreshCount() error {
-	n, err := m.store.Count()
+	cfg := m.currentConfig()
+	n, err := m.store.CountFor(cfg.EmbeddingModel, cfg.EmbeddingDimension)
 	if err != nil {
 		return err
 	}
-	cfg := m.currentConfig()
 	indexedTalkers, lastTS, _ := m.store.Coverage(cfg.EmbeddingModel, cfg.EmbeddingDimension)
 	entityCount, _ := m.store.EntityCount(cfg.EmbeddingModel, cfg.EmbeddingDimension)
 	chunkCount, _ := m.store.ChunkCount(cfg.EmbeddingModel, cfg.EmbeddingDimension)
@@ -1994,6 +2028,7 @@ func (m *Manager) refreshCount() error {
 	m.status.KnownTalkers = knownTalkers
 	m.status.UnindexedTalkers = unindexedTalkers
 	m.status.LastIndexedMessageAt = lastIndexedAt
+	m.status.UpdatedAt = time.Now().Format(time.RFC3339)
 	m.mu.Unlock()
 	return nil
 }
